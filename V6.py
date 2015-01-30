@@ -6,8 +6,8 @@ class V6:
     
     """
     """
-    def __init__(self, cam_index=0, fov=60, dist=100, heading=0, incl=0, hessian=500, frame_w=640, frame_h=480, neighbors=2):
-        self.camera = cv2.VideoCapture(cam_index)
+    def __init__(self, capture=0, fov=60, dist=100, heading=0, incl=0, hessian=500, frame_w=640, frame_h=480, neighbors=2):
+        self.camera = cv2.VideoCapture(capture)
         self.set_resolution(frame_w, frame_h)
         self.set_fov(fov)
         self.set_heading(heading)
@@ -101,7 +101,7 @@ class V6:
     """
     Calculate Speed
     """
-    def speed(self, samples=2):
+    def speed(self, samples=2, display=False):
         results = []
         s1 = False
         s2 = False
@@ -120,6 +120,7 @@ class V6:
                 gray2 = cv2.cvtColor(bgr2, cv2.COLOR_BGR2GRAY)
                 (pts1, desc1) = self.surf.detectAndCompute(gray1, None)
                 (pts2, desc2) = self.surf.detectAndCompute(gray2, None)
+                if display: output = np.array(np.hstack((bgr1,bgr2)))
                 if pts1 and pts2:
                     all_matches = self.matcher.knnMatch(desc1, desc2, k=self.neighbors)
                     good_matches = []
@@ -133,15 +134,23 @@ class V6:
                         y1 = int(pt1.pt[1])
                         x2 = int(pt2.pt[0])
                         y2 = int(pt2.pt[1])
-                        distance_px = np.sqrt( (x2 - x1)**2 + (y2 - y1)**2 )
+                        if display: cv2.line(output, (x1, y1), (x2 + self.frame_w, y2), (100,0,255), 1)
+                        distance_px = np.sqrt( (x2 - x1)**2 + (y2 - y1)**2 ) #! this is going to get complex with heading/incl compensation
                         distance_units = distance_px * self.fov / self.frame_w
                         speed = distance_units / (t2 - t1)
                         results.append(speed)
                 else:
                     raise Exception("No matches found: check hessian")
+                if display:
+                    cv2.imshow('', output)
+                    if cv2.waitKey(1) == 27:
+                        pass
         return np.mean(results)
 
 if __name__ == '__main__':
-    test = V6()
-    test.speed()
-    test.close()
+    test = V6(capture='tests/grass_2kmh_25fps.avi')
+    try:
+        while True:
+            test.speed(display=True)
+    except KeyboardInterrupt:
+        test.close()
