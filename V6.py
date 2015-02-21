@@ -5,9 +5,11 @@ import time
 class V6:
     
     """
+    
     """
-    def __init__(self, capture=0, fov=60, dist=100, heading=0, incl=0, hessian=500, frame_w=640, frame_h=480, neighbors=2):
+    def __init__(self, capture=0, fov=0.7, dist=100, heading=0, incl=0, hessian=500, frame_w=640, frame_h=480, neighbors=2, factor=0.65):
         self.camera = cv2.VideoCapture(capture)
+        self.set_matchfactor(factor)
         self.set_resolution(frame_w, frame_h)
         self.set_fov(fov)
         self.set_heading(heading)
@@ -18,10 +20,17 @@ class V6:
         self.matcher = cv2.BFMatcher()
     
     """
+    Close
     """  
     def close(self):
         self.camera.release()
-    
+        
+    def set_matchfactor(self, factor):
+        if factor < 0:
+            raise Exception("Cannot have match less than 1")
+        else:
+            self.factor = factor
+            
     """
     Set Neighbors
     """
@@ -103,10 +112,10 @@ class V6:
     """
     def speed(self, samples=2, display=False):
         results = []
-        s1 = False
-        s2 = False
         for i in range(samples):
             attempts = 0
+            s1 = False
+            s2 = False
             while not (s1 and s2):
                 t1 = time.time()
                 (s1, bgr1) = self.camera.read()
@@ -125,7 +134,7 @@ class V6:
                     all_matches = self.matcher.knnMatch(desc1, desc2, k=self.neighbors)
                     good_matches = []
                     for m,n in all_matches:
-                        if m.distance < 0.65 * n.distance:
+                        if m.distance < self.factor * n.distance:
                             good_matches.append(m)
                     for match in good_matches:
                         pt1 = pts1[match.queryIdx]
@@ -136,14 +145,14 @@ class V6:
                         y2 = int(pt2.pt[1])
                         if display: cv2.line(output, (x1, y1), (x2 + self.frame_w, y2), (100,0,255), 1)
                         distance_px = np.sqrt( (x2 - x1)**2 + (y2 - y1)**2 ) #! this is going to get complex with heading/incl compensation
-                        distance_units = distance_px * self.fov / self.frame_w
+                        distance_units = distance_px * 2 * self.dist * np.tan(self.fov / 2.0) / self.frame_w
                         speed = distance_units / (t2 - t1)
                         results.append(speed)
                 else:
-                    raise Exception("No matches found: check hessian")
+                    raise Exception("No matches found: check hessian value")
                 if display:
                     cv2.imshow('', output)
-                    if cv2.waitKey(1) == 27:
+                    if cv2.waitKey(5) == 3:
                         pass
         return np.mean(results)
 
@@ -151,6 +160,6 @@ if __name__ == '__main__':
     test = V6(capture='tests/grass_2kmh_25fps.avi')
     try:
         while True:
-            test.speed(display=True)
+            print test.speed(display=True)
     except KeyboardInterrupt:
         test.close()
