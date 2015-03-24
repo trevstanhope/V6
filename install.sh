@@ -2,12 +2,14 @@
 echo "Navigating to source directory"
 cd src
 
+# Install AV Codecs from APT
 echo "Installing AV Codecs"
 sudo apt-get install yasm
 sudo apt-get install libavcodec-dev libavformat-dev libswscale-dev libdc1394-22-dev libxine-dev libgstreamer0.10-dev libgstreamer-plugins-base0.10-dev libv4l-dev
 sudo apt-get install libmp3lame-dev libopencore-amrnb-dev libopencore-amrwb-dev libtheora-dev libvorbis-dev libx264-dev libxvidcore-dev
 sudo apt-get install libtiff4-dev libjpeg-dev libjasper-dev
 
+# Install FFMPEG from source
 echo "Installing ffmpeg"
 tar -xvf ffmpeg-0.11.1.tar.bz2
 cd ffmpeg-0.11.1/
@@ -15,14 +17,13 @@ cd ffmpeg-0.11.1/
 make
 sudo make install
 
-
 # Fix for: 'videodev.h' not found
 echo "Fix for 'videodev.h not found'"
 cd /usr/include/linux
 sudo ln -s ../libv4l1-videodev.h videodev.h
 sudo ln -s ../libavformat/avformat.h avformat.h
 
-# OpenCV
+# Install OpenCV from source
 echo "Installing OpenCV 2.4.9"
 sudo apt-get install cmake libgtk2.0-dev pkg-config
 unzip opencv-2.4.9.zip
