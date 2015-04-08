@@ -1,6 +1,5 @@
 """
 V6 - Vision Speed Inference Extension
-
 """
 
 __author__ = 'Trevor Stanhope'
@@ -9,13 +8,14 @@ __version__ = '0.1'
 import cv2, cv
 import numpy as np
 import time
+import sys
 
 class V6:
     
     """
     Initialize
     """
-    def __init__(self, capture=0, fov=0.7, h=100, roll=0, pitch=0, yaw=0, hessian=500, frame_w=640, frame_h=480, neighbors=2, factor=0.65):
+    def __init__(self, capture=0, fov=0.7, h=100, roll=0, pitch=0, yaw=0, hessian=1000, frame_w=640, frame_h=480, neighbors=2, factor=0.65):
         self.camera = cv2.VideoCapture(capture)
         self.set_matchfactor(factor)
         self.set_resolution(frame_w, frame_h)
@@ -247,7 +247,7 @@ class V6:
                 dists = []
                 angles = []
                 if display:
-                    output = np.hstack((bgr1, bgr2))
+                    output = np.array(np.hstack((bgr1, bgr2)))
                 if pairs:
                     for (pt1, pt2) in pairs:
                         if project:
@@ -259,14 +259,16 @@ class V6:
                         if display:
                             (x1, y1) = pt1
                             (x2, y2) = pt2
-                            cv2.line(output, (x1, y1), (x2 + self.frame_w, y2), (100,0,255), 1)
+                            px1 = (int(x1), int(y1))
+                            px2 = (int(x2 + self.frame_w), int(y2))
+                            cv2.line(output, px1, px2, (100,0,255), 1)
                 else:
                     raise Exception("No matches found: check hessian value")
                     
                 # Find the mean of each
-                v = np.mean(dists / (t2 - t1))
+                v = np.mean(dists) / (t2 - t1)
                 theta = np.mean(angles)
-                results.append(v, theta)
+                results.append((v, theta))
                 if display:
                     cv2.imshow('', output)
                     if cv2.waitKey(5) == 3:
@@ -274,7 +276,8 @@ class V6:
         return results
         
 if __name__ == '__main__':
-    test = V6(capture='tests/grass_2kmh_25fps.avi')
+    source = sys.argv[1]
+    test = V6(capture=source)
     try:
         while True:
             print test.calculate(display=True)
