@@ -9,13 +9,13 @@ import cv2, cv
 import numpy as np
 import time
 import sys
-
+from matplotlib import pyplot as plt
 class V6:
     
     """
     Initialize
     """
-    def __init__(self, capture=0, fov=0.7, h=100, roll=0, pitch=0, yaw=0, hessian=1000, frame_w=640, frame_h=480, neighbors=2, factor=0.65):
+    def __init__(self, capture=0, fov=0.60, h=90, roll=0, pitch=0, yaw=0, hessian=1000, frame_w=640, frame_h=480, neighbors=2, factor=0.65):
         self.camera = cv2.VideoCapture(capture)
         self.set_matchfactor(factor)
         self.set_resolution(frame_w, frame_h)
@@ -217,69 +217,71 @@ class V6:
     Y = h / tan(theta_x - theta)
     X = x * sqrt( (h^2 + Y^2) / (f^2 + y^2) )
     """
-    def project(self, x, y, f=None):
-        if not f and self.frame_h and self.fov_h:
-            f = self.frame_h / (2 * tan(self.fov_h / 2.0))
-        theta = np.atan(y / f)
-        Y = self.h / np.tan( (np.pi/2.0 - self.incl) - theta)
-        X = x * np.sqrt( (self.h^2 + Y^2) / (f^2 + y^2) )
+    def project(self, x, y):
+        f = self.frame_h / (2 * np.tan(self.fov / 2.0))
+        theta = np.arctan(y / f)
+        Y = self.h / np.tan( (np.pi/2.0 - self.pitch) - theta)
+        X = x * np.sqrt( (self.h**2 + Y**2) / (f**2 + y**2) )
         return (X, Y)
     
     """
     Calculate Speed and Direction
     """
-    def calculate(self, samples=1, display=False, project=False, max_attempts=5):
+    def test_algorithm(self, timestamps, output='output.csv', display=False, max_attempts=5):
         results = []
-        for i in range(samples):
-            attempts = 0
-            s1 = False
-            s2 = False
-            while not (s1 and s2):
-                t1 = time.time()
-                (s1, bgr1) = self.camera.read()
-                t2 = time.time()
-                (s2, bgr2) = self.camera.read()
-                attempts += 1
-                if attempts > max_attempts:
-                    raise Exception("Camera failure")
-            else:
-                pairs = self.match_images(bgr1, bgr2)
-                dists = []
-                angles = []
-                if display:
-                    output = np.array(np.hstack((bgr1, bgr2)))
-                if pairs:
-                    for (pt1, pt2) in pairs:
-                        if project:
-                            dists.append(self.distance(pt1, pt2, project=True))
-                            angles.append(self.direction(pt1, pt2, project=True))
+        with open(timestamps, 'r') as timefile:
+            with open(output, 'w') as csvfile:
+                while True:
+                    attempts = 0
+                    s1 = False
+                    s2 = False
+                    while not (s1 and s2):
+                        t1 = float(timefile.readline())
+                        (s1, bgr1) = self.camera.read()
+                        t2 = float(timefile.readline())
+                        (s2, bgr2) = self.camera.read()                            
+                        attempts += 1
+                        if attempts > max_attempts:
+                            raise Exception("Camera failure")
+                    else:
+                        pairs = self.match_images(bgr1, bgr2)
+                        dists = []
+                        angles = []
+                        if display: output = np.array(np.hstack((bgr1, bgr2)))
+                        if pairs:
+                            for (pt1, pt2) in pairs:
+                                d = self.distance(pt1, pt2, project=True)
+                                dists.append(d)
+                                a = self.direction(pt1, pt2, project=True)
+                                angles.append(a)
+                                if display:
+                                    (x1, y1) = pt1
+                                    (x2, y2) = pt2
+                                    px1 = (int(x1), int(y1))
+                                    px2 = (int(x2 + self.frame_w), int(y2))
+                                    cv2.line(output, px1, px2, (100,0,255), 1)
+                            dists_str = [str(d) for d in dists]
+                            newline = ','.join(dists_str) + '\n'
+                            csvfile.write(newline)                        
                         else:
-                            dists.append(self.distance(pt1, pt2))
-                            angles.append(self.direction(pt1, pt2))
+                            raise Exception("No matches found: check hessian value")
+                            
+                        # Find the statistical estimator of each
+                        v = 0.036 * np.median(dists) / (t2 - t1) # convert to km/hr
+                        theta = np.mean(angles)
+                        print v, theta
+                        results.append((v, theta))
                         if display:
-                            (x1, y1) = pt1
-                            (x2, y2) = pt2
-                            px1 = (int(x1), int(y1))
-                            px2 = (int(x2 + self.frame_w), int(y2))
-                            cv2.line(output, px1, px2, (100,0,255), 1)
-                else:
-                    raise Exception("No matches found: check hessian value")
-                    
-                # Find the mean of each
-                v = np.mean(dists) / (t2 - t1)
-                theta = np.mean(angles)
-                results.append((v, theta))
-                if display:
-                    cv2.imshow('', output)
-                    if cv2.waitKey(5) == 3:
-                        pass
-        return results
+                            cv2.imshow('', output)
+                            if cv2.waitKey(5) == 3:
+                                pass
+            return results
         
 if __name__ == '__main__':
     source = sys.argv[1]
-    test = V6(capture=source)
+    timestamps = sys.argv[2]
+    ext = V6(capture=source)
     try:
-        while True:
-            print test.calculate(display=True)
+        res = ext.test_algorithm(timestamps, display=True)
     except KeyboardInterrupt:
-        test.close()
+        ext.close()
