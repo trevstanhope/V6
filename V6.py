@@ -10,20 +10,30 @@ import numpy as np
 import time
 import sys
 from matplotlib import pyplot as plt
+
 class V6:
     
     """
     Initialize
+    Optional Arguments:
+        capture :
+        fov : 
+        d : depth from surface (meters)
+        roll : 
+        pitch :
+        yaw : 
+        hessian : iterations of hessian filter
+        frame
     """
-    def __init__(self, capture=0, fov=0.60, h=90, roll=0, pitch=0, yaw=0, hessian=1000, frame_w=640, frame_h=480, neighbors=2, factor=0.65):
+    def __init__(self, capture=0, fov=0.50, d=1.0, roll=0, pitch=0, yaw=0, hessian=100, w=640, h=480, neighbors=2, factor=0.5):
         self.camera = cv2.VideoCapture(capture)
         self.set_matchfactor(factor)
-        self.set_resolution(frame_w, frame_h)
+        self.set_resolution(w, h)
         self.set_fov(fov) # set the field of view (horizontal)
         self.set_pitch(pitch) # 0 rad
         self.set_roll(roll) # 0 rad
         self.set_yaw(yaw) # 0 rad
-        self.set_height(h) # camera distance at center
+        self.set_depth(d) # camera distance at center
         self.set_neighbors(neighbors)
         self.set_matcher(hessian)
     
@@ -59,27 +69,27 @@ class V6:
             
     """
     Set Resolution
-    frame_w [px]
-    frame_h [px]
+    w : image width [px]
+    h : image height [px]
     """
-    def set_resolution(self, frame_w, frame_h):
-        if (frame_w <= 0) or (frame_h <= 0):
+    def set_resolution(self, w, h):
+        if (w <= 0) or (h <= 0):
             raise Exception("Improper frame size")
         else:
-            self.frame_w = frame_w
-            self.frame_h = frame_h
-            self.camera.set(cv.CV_CAP_PROP_FRAME_WIDTH, frame_w)
-            self.camera.set(cv.CV_CAP_PROP_FRAME_HEIGHT, frame_h)
+            self.w = w
+            self.h = h
+            self.camera.set(cv.CV_CAP_PROP_FRAME_WIDTH, w)
+            self.camera.set(cv.CV_CAP_PROP_FRAME_HEIGHT, h)
     
     """
     Set distance at center of frame
-    dist [cm]
+    d : depth of view [m]
     """
-    def set_height(self, h):
-        if h <= 0:
+    def set_depth(self, d):
+        if d <= 0:
             raise Exception("Improper distance")
         else:
-            self.h = h
+            self.d = d
     
     """
     Set Inclination
@@ -204,77 +214,69 @@ class V6:
         return theta
     
     """
-    Project points from pixels to metric units
-    Arguments:
+    Project points from pixels to real units
+    Required arguments:
+        x : 
+        y : 
+    Optional arguments:
+        h : height of camera from surface (any units)
+        fov : horizontal field of view
+        w : width of image (in pixels)
+        pitch : angle of inclination (in radians)
         f : focal length
-        h : height of camera
-        theta_x : angle of inclination
     Returns:
-        
-    fov_h = 2 * atan(0.5 * x / f)
-    fov_v = 2 * atan(0.5 * y / f)
-    theta = atan(y / f)
-    Y = h / tan(theta_x - theta)
-    X = x * sqrt( (h^2 + Y^2) / (f^2 + y^2) )
+        (X, Y): point location
     """
-    def project(self, x, y):
-        f = self.frame_h / (2 * np.tan(self.fov / 2.0))
+    def project(self, x, y, d=None, fov=None, w=None, pitch=None, f=None):
+        f = self.w / (2 * np.tan(self.fov / 2.0))
         theta = np.arctan(y / f)
-        Y = self.h / np.tan( (np.pi/2.0 - self.pitch) - theta)
-        X = x * np.sqrt( (self.h**2 + Y**2) / (f**2 + y**2) )
+        Y = self.d / np.tan( (np.pi/2.0 - self.pitch) - theta)
+        X = x * np.sqrt( (self.d**2 + Y**2) / (f**2 + y**2) )
         return (X, Y)
     
     """
-    Calculate Speed and Direction
+    Test the matching algorithm on a video with a timestamp file
     """
-    def test_algorithm(self, timestamps, output='output.csv', display=False, max_attempts=5):
+    def test_algorithm(self, fps=33.0, output='output.csv', display=False):
         results = []
-        with open(timestamps, 'r') as timefile:
-            with open(output, 'w') as csvfile:
-                while True:
-                    attempts = 0
-                    s1 = False
-                    s2 = False
-                    while not (s1 and s2):
-                        t1 = float(timefile.readline())
-                        (s1, bgr1) = self.camera.read()
-                        t2 = float(timefile.readline())
-                        (s2, bgr2) = self.camera.read()                            
-                        attempts += 1
-                        if attempts > max_attempts:
-                            raise Exception("Camera failure")
-                    else:
-                        pairs = self.match_images(bgr1, bgr2)
-                        dists = []
-                        angles = []
-                        if display: output = np.array(np.hstack((bgr1, bgr2)))
-                        if pairs:
-                            for (pt1, pt2) in pairs:
-                                d = self.distance(pt1, pt2, project=True)
-                                dists.append(d)
-                                a = self.direction(pt1, pt2, project=True)
-                                angles.append(a)
-                                if display:
-                                    (x1, y1) = pt1
-                                    (x2, y2) = pt2
-                                    px1 = (int(x1), int(y1))
-                                    px2 = (int(x2 + self.frame_w), int(y2))
-                                    cv2.line(output, px1, px2, (100,0,255), 1)
+        with open(output, 'w') as csvfile:
+            while True:
+                (s1, bgr1) = self.camera.read()
+                (s2, bgr2) = self.camera.read()                            
+                if s1 and s2:
+                    pairs = self.match_images(bgr1, bgr2)
+                    dists = []
+                    angles = []
+                    if display: output = np.array(np.hstack((bgr1, bgr2)))
+                    try:
+                        for (pt1, pt2) in pairs:
+                            d = self.distance(pt1, pt2, project=True)
+                            dists.append(d)
+                            a = self.direction(pt1, pt2, project=True)
+                            angles.append(a)
+                            if display:
+                                (x1, y1) = pt1
+                                (x2, y2) = pt2
+                                px1 = (int(x1), int(y1))
+                                px2 = (int(x2 + self.w), int(y2))
+                                cv2.line(output, px1, px2, (100,0,255), 1)
                             dists_str = [str(d) for d in dists]
                             newline = ','.join(dists_str) + '\n'
                             csvfile.write(newline)                        
-                        else:
-                            raise Exception("No matches found: check hessian value")
+                    except Exception as e:
+                        print "No matches found: check hessian value"
                             
-                        # Find the statistical estimator of each
-                        v = 0.036 * np.median(dists) / (t2 - t1) # convert to km/hr
-                        theta = np.mean(angles)
-                        print v, theta
-                        results.append((v, theta))
-                        if display:
-                            cv2.imshow('', output)
-                            if cv2.waitKey(5) == 3:
-                                pass
+                    # Find the statistical estimator of each
+                    dists = np.array(dists)
+                    dt = 1 / fps
+                    v = 3.6 * dists / dt # convert from m/s to km/hr
+                    v_nonzero = v[v > 1]
+                    v_med = np.mean(v_nonzero)
+                    print v_med, dt
+                    if display:
+                        cv2.imshow('', output)
+                        if cv2.waitKey(5) == 5:
+                            pass
             return results
         
 if __name__ == '__main__':
@@ -282,6 +284,6 @@ if __name__ == '__main__':
     timestamps = sys.argv[2]
     ext = V6(capture=source)
     try:
-        res = ext.test_algorithm(timestamps, display=True)
+        ext.test_algorithm(display=True)
     except KeyboardInterrupt:
         ext.close()
