@@ -1,5 +1,8 @@
 """
 V6 - Vision Speed Inference Extension
+
+Needs to have run() which takes into account that the algorithm is slower than the 
+camera framerate.
 """
 
 __author__ = 'Trevor Stanhope'
@@ -25,7 +28,7 @@ class V6:
         hessian : iterations of hessian filter
         frame
     """
-    def __init__(self, capture=0, fov=0.50, d=1.0, roll=0, pitch=0, yaw=0, hessian=100, w=640, h=480, neighbors=2, factor=0.5):
+    def __init__(self, capture=0, fov=0.50, d=1.0, roll=0, pitch=0, yaw=0, hessian=1000, w=640, h=480, neighbors=2, factor=0.5):
         self.camera = cv2.VideoCapture(capture)
         self.set_matchfactor(factor)
         self.set_resolution(w, h)
@@ -38,13 +41,22 @@ class V6:
         self.set_matcher(hessian)
     
     """
-    Set the keypoint matcher configuration
+    Set the keypoint matcher configuration, supports BF or FLANN
     """
-    def set_matcher(self, hessian):
+    def set_matcher(self, hessian, use_flann=False):
         try:
             self.surf = cv2.SURF(hessian)
-            self.matcher = cv2.BFMatcher()
+            if use_flann:
+                self.FLANN_INDEX_KDTREE = 0
+                self.FLANN_TREES = 10
+                self.FLANN_CHECKS = 1000
+                self.INDEX_PARAMS = dict(algorithm=self.FLANN_INDEX_KDTREE, trees=self.FLANN_TREES)
+                self.SEARCH_PARAMS = dict(checks=self.FLANN_CHECKS) # or pass empty dictionary
+                self.matcher = cv2.FlannBasedMatcher(self.INDEX_PARAMS, self.SEARCH_PARAMS)
+            else:
+                self.matcher = cv2.BFMatcher()
         except Exception as e:
+            print str(e)
             raise Exception("Failed to generate a matcher")
     """
     Close
@@ -165,16 +177,16 @@ class V6:
             matching_pairs = []
             if pts1 and pts2:
                 all_matches = self.matcher.knnMatch(desc1, desc2, k=self.neighbors)
-                good_matches = []
-                for m,n in all_matches:
-                    if m.distance < self.factor * n.distance:
-                        good_matches.append(m)
-                for match in good_matches:
-                    pt1 = pts1[match.queryIdx]
-                    pt2 = pts2[match.trainIdx]
-                    pt1 = (pt1.pt[0], pt1.pt[1])
-                    pt2 = (pt2.pt[0], pt2.pt[1])
-                    matching_pairs.append((pt1, pt2))
+                try:
+                    for m,n in all_matches:
+                        if m.distance < self.factor * n.distance:
+                            pt1 = pts1[m.queryIdx]
+                            pt2 = pts2[m.trainIdx]
+                            pt1 = (pt1.pt[0], pt1.pt[1])
+                            pt2 = (pt2.pt[0], pt2.pt[1])
+                            matching_pairs.append((pt1, pt2))
+                except Exception as e:
+                    print str(e)
             return matching_pairs
         else:
             raise Exception("No matcher exists!")
@@ -235,55 +247,33 @@ class V6:
         return (X, Y)
     
     """
-    Test the matching algorithm on a video with a timestamp file
+    Test the matching algorithm on a video file with a fixed frame rate
+    Optional Arguments:
+        dt : the time between each frame
     """
-    def test_algorithm(self, fps=33.0, output='output.csv', display=False):
+    def test_algorithm(self, dt=0.03):
         results = []
-        with open(output, 'w') as csvfile:
-            while True:
+        while True:
+            try:
+                a = time.time()
                 (s1, bgr1) = self.camera.read()
-                (s2, bgr2) = self.camera.read()                            
-                if s1 and s2:
-                    pairs = self.match_images(bgr1, bgr2)
-                    dists = []
-                    angles = []
-                    if display: output = np.array(np.hstack((bgr1, bgr2)))
-                    try:
-                        for (pt1, pt2) in pairs:
-                            d = self.distance(pt1, pt2, project=True)
-                            dists.append(d)
-                            a = self.direction(pt1, pt2, project=True)
-                            angles.append(a)
-                            if display:
-                                (x1, y1) = pt1
-                                (x2, y2) = pt2
-                                px1 = (int(x1), int(y1))
-                                px2 = (int(x2 + self.w), int(y2))
-                                cv2.line(output, px1, px2, (100,0,255), 1)
-                            dists_str = [str(d) for d in dists]
-                            newline = ','.join(dists_str) + '\n'
-                            csvfile.write(newline)                        
-                    except Exception as e:
-                        print "No matches found: check hessian value"
+                (s2, bgr2) = self.camera.read()
+                pairs = self.match_images(bgr1, bgr2)
+                dists = [self.distance(pt1, pt2, project=True) for (pt1, pt2) in pairs]
+                dists = np.array(dists)
+                v = 3.6 * dists / dt # convert from m/s to km/hr
+                v_nonzero = v[v > 1] # eliminate non-moving matches (e.g. shadows)
+                v_out = np.mean(v_nonzero)
+                b = time.time()
+                print v_out, (1 / (b - a))
+            except Exception as e:
+                print str(e)
+                break
                             
-                    # Find the statistical estimator of each
-                    dists = np.array(dists)
-                    dt = 1 / fps
-                    v = 3.6 * dists / dt # convert from m/s to km/hr
-                    v_nonzero = v[v > 1]
-                    v_med = np.mean(v_nonzero)
-                    print v_med, dt
-                    if display:
-                        cv2.imshow('', output)
-                        if cv2.waitKey(5) == 5:
-                            pass
-            return results
-        
 if __name__ == '__main__':
     source = sys.argv[1]
-    timestamps = sys.argv[2]
     ext = V6(capture=source)
     try:
-        ext.test_algorithm(display=True)
+        ext.test_algorithm()
     except KeyboardInterrupt:
         ext.close()
