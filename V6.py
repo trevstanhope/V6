@@ -13,6 +13,7 @@ import numpy as np
 import time
 import sys
 from matplotlib import pyplot as plt
+from itertools import cycle
 
 class V6:
     
@@ -159,7 +160,7 @@ class V6:
     Flush Buffer
     To get the most recent images, flush the buffer of older frames
     """
-    def flush_buffer(self, frames):
+    def flush(self, frames=2):
         for i in range(frames):
             (s, bgr) = self.camera.read()
             
@@ -269,11 +270,34 @@ class V6:
             except Exception as e:
                 print str(e)
                 break
-                            
+    """
+    Run algorithm with buffer flushing
+    This compensates for the relatively slow pace of the algorithm
+    WARNING: this function is meant to be used with a LIVE VIDEO STREAM ONLY
+    """
+    def run(self, n=10):
+        window = [0] * n
+        for i in cycle(range(n)):
+            self.flush()
+            (s1, bgr1) = self.camera.read()
+            t1 = time.time()
+            (s2, bgr2) = self.camera.read()
+            t2 = time.time()
+            pairs = self.match_images(bgr1, bgr2)
+            dists = [self.distance(pt1, pt2, project=True) for (pt1, pt2) in pairs]
+            dists = np.array(dists)
+            v = 3.6 * dists / (t2 - t1) # convert from m/s to km/hr
+            v_nonzero = v[v > 1] # eliminate non-moving matches (e.g. shadows)
+            v_out = np.mean(v_nonzero)
+            window[i] = v_out
+            v_avg = np.mean(window)
+            print v_avg
+        
 if __name__ == '__main__':
     source = sys.argv[1]
     ext = V6(capture=source)
     try:
-        ext.test_algorithm()
+        #ext.test_algorithm()
+        ext.run()
     except KeyboardInterrupt:
         ext.close()
