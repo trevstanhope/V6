@@ -44,16 +44,18 @@ class V6:
     """
     Set the keypoint matcher configuration, supports BF or FLANN
     """
-    def set_matcher(self, hessian, use_flann=False):
+    def set_matcher(self, hessian, use_flann=True):
         try:
             self.surf = cv2.SURF(hessian)
+            # Use the FLANN matcher
             if use_flann:
-                self.FLANN_INDEX_KDTREE = 0
-                self.FLANN_TREES = 10
-                self.FLANN_CHECKS = 1000
+                self.FLANN_INDEX_KDTREE = 1
+                self.FLANN_TREES = 5
+                self.FLANN_CHECKS = 50
                 self.INDEX_PARAMS = dict(algorithm=self.FLANN_INDEX_KDTREE, trees=self.FLANN_TREES)
                 self.SEARCH_PARAMS = dict(checks=self.FLANN_CHECKS) # or pass empty dictionary
                 self.matcher = cv2.FlannBasedMatcher(self.INDEX_PARAMS, self.SEARCH_PARAMS)
+            # Use the Brute Force matcher
             else:
                 self.matcher = cv2.BFMatcher()
         except Exception as e:
@@ -217,7 +219,7 @@ class V6:
     Returns:
         theta : float
     """
-    def direction(self, pt1, pt2, project=False):
+    def heading(self, pt1, pt2, project=False):
         (x1, y1) = pt1
         (x2, y2) = pt2
         if project:
@@ -256,24 +258,37 @@ class V6:
         results = []
         while True:
             try:
-                a = time.time()
                 (s1, bgr1) = self.camera.read()
                 (s2, bgr2) = self.camera.read()
                 pairs = self.match_images(bgr1, bgr2)
+                
+                # Calculate Distances (velocity)
                 dists = [self.distance(pt1, pt2, project=True) for (pt1, pt2) in pairs]
                 dists = np.array(dists)
                 v = 3.6 * dists / dt # convert from m/s to km/hr
-                v_nonzero = v[v > 1] # eliminate non-moving matches (e.g. shadows)
-                v_out = np.mean(v_nonzero)
-                b = time.time()
+                v_possible = v[v > 1] # eliminate non-moving matches (e.g. shadows)
+                v_out = np.mean(v_possible)
+                
+                # Calculate Headings (theta)
+                headings = [self.heading(pt1, pt2, project=True) for (pt1, pt2) in pairs]
+                headings = np.array(headings)
+                t_possible = headings[headings < 45]
+                t_out = np.mean(t_possible)
+                
+                # (Optional) Display images
+                print v_out, t_out
                 if display:
                     output = np.array(np.hstack((bgr1, bgr2)))
                     for ((x1,y1), (x2,y2)) in pairs:
-                        cv2.line(output, (int(x1), int(y1)), (int(x1 + self.w), int(y2)), (0,255,255), 1)   
+                        pt1 = (int(x1), int(y1))
+                        pt2 = (int(x1 + self.w), int(y2))
+                        cv2.circle(output, pt1, 5, (0,0,255))
+                        cv2.circle(output, pt2, 5, (0,255,0))
+                        cv2.line(output, pt1, pt2, (255,0,0), 1)
                     cv2.imshow("", output)
                     if cv2.waitKey(5) == 5:
                         break
-                print v_out, (1 / (b - a))
+
             except Exception as e:
                 print str(e)
                 break
