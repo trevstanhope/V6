@@ -252,7 +252,7 @@ class V6:
     Optional Arguments:
         dt : the time between each frame
     """
-    def test_algorithm(self, dt=0.03):
+    def test_algorithm(self, dt=0.03, display=False):
         results = []
         while True:
             try:
@@ -266,6 +266,13 @@ class V6:
                 v_nonzero = v[v > 1] # eliminate non-moving matches (e.g. shadows)
                 v_out = np.mean(v_nonzero)
                 b = time.time()
+                if display:
+                    output = np.array(np.hstack((bgr1, bgr2)))
+                    for ((x1,y1), (x2,y2)) in pairs:
+                        cv2.line(output, (int(x1), int(y1)), (int(x1 + self.w), int(y2)), (0,255,255), 1)   
+                    cv2.imshow("", output)
+                    if cv2.waitKey(5) == 5:
+                        break
                 print v_out, (1 / (b - a))
             except Exception as e:
                 print str(e)
@@ -297,7 +304,6 @@ if __name__ == '__main__':
     source = sys.argv[1]
     ext = V6(capture=source)
     try:
-        #ext.test_algorithm()
-        ext.run()
+        ext.test_algorithm(display=True)
     except KeyboardInterrupt:
         ext.close()
