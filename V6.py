@@ -1,6 +1,8 @@
 """
 V6 - Vision Speed Inference Extension
 
+Runs as a ZMQ client
+
 Needs to have run() which takes into account that the algorithm is slower than the 
 camera framerate.
 """
@@ -14,6 +16,8 @@ import time
 import sys
 from matplotlib import pyplot as plt
 from itertools import cycle
+import zmq
+import json
 
 class V6:
     
@@ -29,8 +33,19 @@ class V6:
         hessian : iterations of hessian filter
         frame
     """
-    def __init__(self, capture=0, fov=0.50, d=1.0, roll=0, pitch=0, yaw=0, hessian=1000, w=640, h=480, neighbors=2, factor=0.5):
+    def __init__(self, capture=0, fov=0.50, d=1.0, roll=0, pitch=0, yaw=0, hessian=1000, w=640, h=480, neighbors=2, factor=0.5, zmq_addr="tcp://127.0.0.1:1980", zmq_timeout=0.1):
+        
+        # Things which should be set once
         self.camera = cv2.VideoCapture(capture)
+        self.zmq_addr = zmq_addr
+        self.zmq_timeout = zmq_timeout
+        self.zmq_context = zmq.Context()
+        self.zmq_client = self.zmq_context.socket(zmq.REQ)
+        self.zmq_client.connect(self.zmq_addr)
+        self.zmq_poller = zmq.Poller()
+        self.zmq_poller.register(self.zmq_client, zmq.POLLIN)
+        
+        # Things which can be changed at any time
         self.set_matchfactor(factor)
         self.set_resolution(w, h)
         self.set_fov(fov) # set the field of view (horizontal)
@@ -40,7 +55,7 @@ class V6:
         self.set_depth(d) # camera distance at center
         self.set_neighbors(neighbors)
         self.set_matcher(hessian)
-    
+        
     """
     Set the keypoint matcher configuration, supports BF or FLANN
     """
@@ -208,8 +223,8 @@ class V6:
         if project:
             (x1, y1) = self.project(x1, y1)
             (x2, y2) = self.project(x2, y2)
-        distance = np.sqrt( (x2 - x1)**2 + (y2 - y1)**2 )
-        return distance
+        dist = np.sqrt( (x2 - x1)**2 + (y2 - y1)**2 )
+        return dist
     
     """
     Find the direction of travel
@@ -245,38 +260,53 @@ class V6:
     def project(self, x, y, d=None, fov=None, w=None, pitch=None, f=None):
         f = self.w / (2 * np.tan(self.fov / 2.0))
         theta = np.arctan(y / f)
-        Y = self.d / np.tan( (np.pi/2.0 - self.pitch) - theta)
+        Y = self.d / np.tan( (np.pi / 2.0 - self.pitch) - theta)
         X = x * np.sqrt( (self.d**2 + Y**2) / (f**2 + y**2) )
         return (X, Y)
+    
+    """
+    Optional:
+        dt : time differential between bgr1 and bgr2
+    Returns:
+        v : the estimated speed of travel
+        t : the estimated angle moved between two keypoints
+        pairs : matching pairs between bgr1 and bgr2
+        bgr1 : the first image
+        bgr2 : the second image
+        
+    """
+    def estimate_vector(self, dt=None):
+        (s1, bgr1) = self.camera.read()
+        t1 = time.time()
+        (s2, bgr2) = self.camera.read()
+        t2 = time.time()
+        if not dt:
+            dt = t2 - t1
+        pairs = self.match_images(bgr1, bgr2)
+        dists = [self.distance(pt1, pt2, project=True) for (pt1, pt2) in pairs]
+        dists = np.array(dists)
+        v_list = 3.6 * dists / dt # convert from m/s to km/hr
+        v_possible = v_list[v_list > 1] # eliminate non-moving matches (e.g. shadows)
+        v = np.mean(v_possible) # take the mean
+        headings = [self.heading(pt1, pt2, project=True) for (pt1, pt2) in pairs]
+        headings = np.array(headings)
+        t_list = (np.pi / 180) * headings
+        t_possible = t_list[t_list < 45]
+        t = np.mean(t_possible)
+        return (v, t, pairs, bgr1, bgr2) # (gamma, theta)
     
     """
     Test the matching algorithm on a video file with a fixed frame rate
     Optional Arguments:
         dt : the time between each frame
     """
-    def test_algorithm(self, dt=0.03, display=False):
-        results = []
+    def test_algorithm(self, dt=None, display=False):
         while True:
             try:
-                (s1, bgr1) = self.camera.read()
-                (s2, bgr2) = self.camera.read()
-                pairs = self.match_images(bgr1, bgr2)
-                
-                # Calculate Distances (velocity)
-                dists = [self.distance(pt1, pt2, project=True) for (pt1, pt2) in pairs]
-                dists = np.array(dists)
-                v = 3.6 * dists / dt # convert from m/s to km/hr
-                v_possible = v[v > 1] # eliminate non-moving matches (e.g. shadows)
-                v_out = np.mean(v_possible)
-                
-                # Calculate Headings (theta)
-                headings = [self.heading(pt1, pt2, project=True) for (pt1, pt2) in pairs]
-                headings = np.array(headings)
-                t_possible = headings[headings < 45]
-                t_out = np.mean(t_possible)
+                (v, t, pairs, bgr1, bgr2) = self.estimate_vector(dt=dt)
+                print v, t
                 
                 # (Optional) Display images
-                print v_out, t_out
                 if display:
                     output = np.array(np.hstack((bgr1, bgr2)))
                     for ((x1,y1), (x2,y2)) in pairs:
@@ -288,37 +318,53 @@ class V6:
                     cv2.imshow("", output)
                     if cv2.waitKey(5) == 5:
                         break
-
             except Exception as e:
                 print str(e)
                 break
+                
     """
     Run algorithm with buffer flushing
     This compensates for the relatively slow pace of the algorithm
     WARNING: this function is meant to be used with a LIVE VIDEO STREAM ONLY
     """
-    def run(self, n=10):
-        window = [0] * n
+    def run(self, n=3, dt=None):
+        v_list = [0] * n
+        t_list = [0] * n
         for i in cycle(range(n)):
             self.flush()
-            (s1, bgr1) = self.camera.read()
-            t1 = time.time()
-            (s2, bgr2) = self.camera.read()
-            t2 = time.time()
-            pairs = self.match_images(bgr1, bgr2)
-            dists = [self.distance(pt1, pt2, project=True) for (pt1, pt2) in pairs]
-            dists = np.array(dists)
-            v = 3.6 * dists / (t2 - t1) # convert from m/s to km/hr
-            v_nonzero = v[v > 1] # eliminate non-moving matches (e.g. shadows)
-            v_out = np.mean(v_nonzero)
-            window[i] = v_out
-            v_avg = np.mean(window)
-            print v_avg
+            (v, t, p, im1, im2) = self.estimate_vector(dt=0.03)
+            v_list[i] = v
+            t_list[i] = t
+            e = {
+                'uid' : 'V6',
+                'task' : 'speed',
+                'data' : {
+                    'v_avg' : np.mean(v_list),
+                    't_avg' : np.mean(t_list)
+                }
+            }
+            print e
+            try:
+                dump = json.dumps(e)
+                self.zmq_client.send(dump)
+                time.sleep(self.zmq_timeout)
+                socks = dict(self.zmq_poller.poll(self.zmq_timeout))
+                if socks:
+                    if socks.get(self.zmq_client) == zmq.POLLIN:
+                        dump = self.zmq_client.recv(zmq.NOBLOCK) # zmq.NOBLOCK
+                        response = json.loads(dump)
+                    else:
+                        pass
+                else:
+                    pass
+            except Exception as err:
+                print str(err)
         
 if __name__ == '__main__':
     source = sys.argv[1]
     ext = V6(capture=source)
     try:
-        ext.test_algorithm(display=True)
+        #ext.test_algorithm(display=True, dt=0.03)
+        ext.run(dt=0.03)
     except KeyboardInterrupt:
         ext.close()
