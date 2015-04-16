@@ -18,9 +18,15 @@ from matplotlib import pyplot as plt
 from itertools import cycle
 import zmq
 import json
+from datetime import datetime
 
-class V6:
+# Useful Functions 
+def pretty_print(task, msg):
+    date = datetime.strftime(datetime.now(), '%d/%b/%Y:%H:%M:%S')
+    print("%s %s %s" % (date, task, msg))
     
+class V6:
+
     """
     Initialize
     Optional Arguments:
@@ -275,7 +281,7 @@ class V6:
         bgr2 : the second image
         
     """
-    def estimate_vector(self, dt=None):
+    def estimate_vector(self, dt=None, v_min=1, t_max=45):
         (s1, bgr1) = self.camera.read()
         t1 = time.time()
         (s2, bgr2) = self.camera.read()
@@ -286,12 +292,12 @@ class V6:
         dists = [self.distance(pt1, pt2, project=True) for (pt1, pt2) in pairs]
         dists = np.array(dists)
         v_list = 3.6 * dists / dt # convert from m/s to km/hr
-        v_possible = v_list[v_list > 1] # eliminate non-moving matches (e.g. shadows)
+        v_possible = v_list[v_list > v_min] # eliminate non-moving matches (e.g. shadows)
         v = np.mean(v_possible) # take the mean
         headings = [self.heading(pt1, pt2, project=True) for (pt1, pt2) in pairs]
         headings = np.array(headings)
         t_list = (np.pi / 180) * headings
-        t_possible = t_list[t_list < 45]
+        t_possible = t_list[t_list < t_max]
         t = np.mean(t_possible)
         return (v, t, pairs, bgr1, bgr2) # (gamma, theta)
     
@@ -300,11 +306,11 @@ class V6:
     Optional Arguments:
         dt : the time between each frame
     """
-    def test_algorithm(self, dt=None, display=False):
+    def test_algorithm(self, dt=None, display=False, wait=0):
         while True:
             try:
                 (v, t, pairs, bgr1, bgr2) = self.estimate_vector(dt=dt)
-                print v, t
+                pretty_print('CV6', '%f km/h at %f deg' % (v, t))
                 
                 # (Optional) Display images
                 if display:
@@ -312,10 +318,11 @@ class V6:
                     for ((x1,y1), (x2,y2)) in pairs:
                         pt1 = (int(x1), int(y1))
                         pt2 = (int(x1 + self.w), int(y2))
-                        cv2.circle(output, pt1, 5, (0,0,255))
-                        cv2.circle(output, pt2, 5, (0,255,0))
+                        cv2.circle(output, pt1, 5, (0,0,255), 2)
+                        cv2.circle(output, pt2, 5, (0,255,0), 2)
                         cv2.line(output, pt1, pt2, (255,0,0), 1)
                     cv2.imshow("", output)
+                    time.sleep(wait) # wait between images
                     if cv2.waitKey(5) == 5:
                         break
             except Exception as e:
@@ -327,7 +334,7 @@ class V6:
     This compensates for the relatively slow pace of the algorithm
     WARNING: this function is meant to be used with a LIVE VIDEO STREAM ONLY
     """
-    def run(self, n=3, dt=None):
+    def run(self, n=3, dt=None, precision=2):
         v_list = [0] * n
         t_list = [0] * n
         for i in cycle(range(n)):
@@ -336,14 +343,14 @@ class V6:
             v_list[i] = v
             t_list[i] = t
             e = {
-                'uid' : 'V6',
-                'task' : 'speed',
+                'uid' : 'CV6',
+                'task' : 'push', # all events from CV6 are pushes
                 'data' : {
-                    'v_avg' : np.mean(v_list),
-                    't_avg' : np.mean(t_list)
+                    'v_avg' : round(np.mean(v_list), precision),
+                    't_avg' : round(np.mean(t_list), precision)
                 }
             }
-            print e
+            pretty_print('CV6', 'Sent: %s' % str(e))
             try:
                 dump = json.dumps(e)
                 self.zmq_client.send(dump)
@@ -353,12 +360,13 @@ class V6:
                     if socks.get(self.zmq_client) == zmq.POLLIN:
                         dump = self.zmq_client.recv(zmq.NOBLOCK) # zmq.NOBLOCK
                         response = json.loads(dump)
+                        pretty_print('CV6', 'Received: %s' % str(response))
                     else:
                         pass
                 else:
                     pass
             except Exception as err:
-                print str(err)
+                pretty_print('CV6', str(err))
         
 if __name__ == '__main__':
     source = sys.argv[1]
