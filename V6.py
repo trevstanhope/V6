@@ -1,9 +1,9 @@
 """
 V6 - Vision Speed Inference Extension
 
-Runs as a ZMQ client
+Runs as a ZMQ client.
 
-Needs to have run() which takes into account that the algorithm is slower than the 
+The main function, run(), takes into account that the algorithm is slower than the 
 camera framerate.
 """
 
