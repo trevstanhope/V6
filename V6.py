@@ -22,7 +22,7 @@ from datetime import datetime
 
 # Useful Functions 
 def pretty_print(task, msg):
-    date = datetime.strftime(datetime.now(), '%d/%b/%Y:%H:%M:%S')
+    date = datetime.strftime(datetime.now(), '[%d/%b/%Y:%H:%M:%S]')
     print("%s %s %s" % (date, task, msg))
     
 class V6:
@@ -281,10 +281,10 @@ class V6:
         bgr2 : the second image
         
     """
-    def estimate_vector(self, dt=None, v_min=1, t_max=45):
-        (s1, bgr1) = self.camera.read()
+    def estimate_vector(self, camera, dt=None, v_min=1, t_max=45):
+        (s1, bgr1) = camera.read()
         t1 = time.time()
-        (s2, bgr2) = self.camera.read()
+        (s2, bgr2) = camera.read()
         t2 = time.time()
         if not dt:
             dt = t2 - t1
@@ -306,10 +306,10 @@ class V6:
     Optional Arguments:
         dt : the time between each frame
     """
-    def test_algorithm(self, dt=None, display=False, wait=0):
+    def run(self, dt=None, display=False, wait=0):
         while True:
             try:
-                (v, t, pairs, bgr1, bgr2) = self.estimate_vector(dt=dt)
+                (v, t, pairs, bgr1, bgr2) = self.estimate_vector(self.camera, dt=dt)
                 pretty_print('CV6', '%f km/h at %f deg' % (v, t))
                 
                 # (Optional) Display images
@@ -334,25 +334,27 @@ class V6:
     This compensates for the relatively slow pace of the algorithm
     WARNING: this function is meant to be used with a LIVE VIDEO STREAM ONLY
     """
-    def run(self, n=3, dt=None, precision=2):
+    def run_async(self, n=3, dt=None, precision=2, uid='CV6', task='push'):
         v_list = [0] * n
         t_list = [0] * n
         for i in cycle(range(n)):
             self.flush()
-            (v, t, p, im1, im2) = self.estimate_vector(dt=0.03)
+            (v, t, p, im1, im2) = self.estimate_vector(self.camera, dt=dt)
             v_list[i] = v
             t_list[i] = t
-            e = {
-                'uid' : 'CV6',
-                'task' : 'push', # all events from CV6 are pushes
+            v_avg = round(np.mean(v_list), precision)
+            t_avg = round(np.mean(t_list), precision)
+            event = {
+                'uid' : uid,
+                'task' : task, # generally, all events from CV6 are pushes
                 'data' : {
-                    'v_avg' : round(np.mean(v_list), precision),
-                    't_avg' : round(np.mean(t_list), precision)
+                    'v_avg' : v_avg,
+                    't_avg' : t_avg
                 }
             }
-            pretty_print('CV6', 'Sent: %s' % str(e))
+            pretty_print('CV6', '%s' % str(event))
             try:
-                dump = json.dumps(e)
+                dump = json.dumps(event)
                 self.zmq_client.send(dump)
                 time.sleep(self.zmq_timeout)
                 socks = dict(self.zmq_poller.poll(self.zmq_timeout))
@@ -367,12 +369,3 @@ class V6:
                     pass
             except Exception as err:
                 pretty_print('CV6', str(err))
-        
-if __name__ == '__main__':
-    source = sys.argv[1]
-    ext = V6(capture=source)
-    try:
-        #ext.test_algorithm(display=True, dt=0.03)
-        ext.run(dt=0.03)
-    except KeyboardInterrupt:
-        ext.close()
