@@ -31,7 +31,7 @@ class V6:
     Initialize
     Optional Arguments:
         capture :
-        fov : 
+        fov : in degrees
         d : depth from surface (meters)
         roll : 
         pitch :
@@ -39,7 +39,7 @@ class V6:
         hessian : iterations of hessian filter
         frame
     """
-    def __init__(self, capture=0, fov=0.50, d=1.0, roll=0, pitch=0, yaw=0, hessian=1000, w=640, h=480, neighbors=2, factor=0.5, zmq_addr="tcp://127.0.0.1:1980", zmq_timeout=0.1):
+    def __init__(self, capture=0, fov=0.75, d=1.0, roll=0, pitch=0, yaw=0, hessian=1000, w=640, h=480, neighbors=2, factor=0.5, zmq_addr="tcp://127.0.0.1:1980", zmq_timeout=0.1):
         
         # Things which should be set once
         self.camera = cv2.VideoCapture(capture)
@@ -65,7 +65,7 @@ class V6:
     """
     Set the keypoint matcher configuration, supports BF or FLANN
     """
-    def set_matcher(self, hessian, use_flann=True):
+    def set_matcher(self, hessian, use_flann=False):
         try:
             self.surf = cv2.SURF(hessian)
             # Use the FLANN matcher
@@ -90,7 +90,7 @@ class V6:
         
     def set_matchfactor(self, factor):
         if factor < 0:
-            raise Exception("Cannot have match less than 1")
+            raise Exception("Cannot have match less than 0")
         else:
             self.factor = factor
             
@@ -126,19 +126,6 @@ class V6:
             raise Exception("Improper distance")
         else:
             self.d = d
-    
-    """
-    Set Inclination
-    incl [rad]
-    0 is orthogonal to surface 
-    """
-    def set_pitch(self, pitch):
-        if pitch < 0:
-            raise Exception("Cannot have negative inclination")
-        elif pitch > np.pi/2.0:
-            raise Exception("Cannot have inclination parallel to surface")
-        else:
-            self.pitch = pitch
 
     """
     Set Pitch
@@ -176,6 +163,8 @@ class V6:
     def set_fov(self, fov):
         if fov <= 0:
             raise Exception("Cannot have negative FOV")
+        if fov >= np.pi:
+            raise Exception("Cannot have FOV greater than Pi radians")
         else:
             self.fov = fov
     
@@ -264,8 +253,8 @@ class V6:
         (X, Y): point location
     """
     def project(self, x, y, d=None, fov=None, w=None, pitch=None, f=None):
-        f = self.w / (2 * np.tan(self.fov / 2.0))
-        theta = np.arctan(y / f)
+        f = self.w / (2.0 * np.tan(self.fov / 2.0))
+        theta = np.arctan2(y / f)
         Y = self.d / np.tan( (np.pi / 2.0 - self.pitch) - theta)
         X = x * np.sqrt( (self.d**2 + Y**2) / (f**2 + y**2) )
         return (X, Y)
@@ -281,10 +270,10 @@ class V6:
         bgr2 : the second image
         
     """
-    def estimate_vector(self, camera, dt=None, v_min=1, t_max=45):
-        (s1, bgr1) = camera.read()
+    def estimate_vector(self, dt=None, v_min=1, t_max=45):
+        (s1, bgr1) = self.camera.read()
         t1 = time.time()
-        (s2, bgr2) = camera.read()
+        (s2, bgr2) = self.camera.read()
         t2 = time.time()
         if not dt:
             dt = t2 - t1
@@ -309,7 +298,7 @@ class V6:
     def run(self, dt=None, display=False, wait=0):
         while True:
             try:
-                (v, t, pairs, bgr1, bgr2) = self.estimate_vector(self.camera, dt=dt)
+                (v, t, pairs, bgr1, bgr2) = self.estimate_vector(dt=dt)
                 pretty_print('CV6', '%f km/h at %f deg' % (v, t))
                 
                 # (Optional) Display images
@@ -339,7 +328,7 @@ class V6:
         t_list = [0] * n
         for i in cycle(range(n)):
             self.flush()
-            (v, t, p, im1, im2) = self.estimate_vector(self.camera, dt=dt)
+            (v, t, p, im1, im2) = self.estimate_vector(dt=dt)
             v_list[i] = v
             t_list[i] = t
             v_avg = round(np.mean(v_list), precision)

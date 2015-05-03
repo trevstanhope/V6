@@ -24,7 +24,7 @@ log_path = os.path.join(file_dir, log_file)
 
 # Get FPS
 # Function to read a video camera and estimate the frames-per-second (fps)
-def get_fps(camera, frames=10):
+def get_fps(camera, frames=100):
     t_n = []
     for i in range(frames):
         (s, bgr) = camera.read()
@@ -35,7 +35,7 @@ def get_fps(camera, frames=10):
     t_f = np.append(t_n[1:], t_i[-1])
     dt = t_f - t_i
     fps = np.reciprocal(np.mean(dt[:-1]))
-    return int(fps)
+    return fps
 
 # Get Frame Size
 def get_frame_size(camera):
