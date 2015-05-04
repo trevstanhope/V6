@@ -39,7 +39,7 @@ class V6:
         hessian : iterations of hessian filter
         frame
     """
-    def __init__(self, capture=0, fov=0.75, d=1.0, roll=0, pitch=0, yaw=0, hessian=1000, w=640, h=480, neighbors=2, factor=0.5, zmq_addr="tcp://127.0.0.1:1980", zmq_timeout=0.1):
+    def __init__(self, capture=0, fov=0.75, f=6, aspect=1.33, d=1000, roll=0, pitch=0, yaw=0, hessian=1000, w=640, h=480, neighbors=2, factor=0.5, zmq_addr="tcp://127.0.0.1:1980", zmq_timeout=0.1):
         
         # Things which should be set once
         self.camera = cv2.VideoCapture(capture)
@@ -55,6 +55,8 @@ class V6:
         self.set_matchfactor(factor)
         self.set_resolution(w, h)
         self.set_fov(fov) # set the field of view (horizontal)
+        self.set_aspect(aspect)
+        self.set_focal_length(f)
         self.set_pitch(pitch) # 0 rad
         self.set_roll(roll) # 0 rad
         self.set_yaw(yaw) # 0 rad
@@ -90,7 +92,7 @@ class V6:
         
     def set_matchfactor(self, factor):
         if factor < 0:
-            raise Exception("Cannot have match less than 0")
+            raise Exception("Cannot have match less than 1")
         else:
             self.factor = factor
             
@@ -167,6 +169,26 @@ class V6:
             raise Exception("Cannot have FOV greater than Pi radians")
         else:
             self.fov = fov
+
+    """
+    Set Aspect Ratio
+    aspect [constant]
+    """
+    def set_aspect(self, aspect):
+        if aspect <= 0:
+            raise Exception("Cannot have negative aspect ratio")
+        else:
+            self.aspect = aspect
+
+    """
+    Set Focal Length
+    f [mm]
+    """
+    def set_focal_length(self, f):
+        if f <= 0:
+            raise Exception("Cannot have negative focal length")
+        else:
+            self.f = f
     
     """ 
     Flush Buffer
@@ -252,11 +274,17 @@ class V6:
     Returns:
         (X, Y): point location
     """
-    def project(self, x, y, d=None, fov=None, w=None, pitch=None, f=None):
-        f = self.w / (2.0 * np.tan(self.fov / 2.0))
-        theta = np.arctan2(y / f)
-        Y = self.d / np.tan( (np.pi / 2.0 - self.pitch) - theta)
-        X = x * np.sqrt( (self.d**2 + Y**2) / (f**2 + y**2) )
+    def project(self, x, y, rotated=True):
+        if rotated:
+            f = self.w / (2.0 * np.tan(self.fov / 2.0))
+            theta = np.arctan(y / f)
+            Y = self.d / np.tan( (np.pi / 2.0 - self.pitch) - theta)
+            X = x * np.sqrt( (self.d**2 + Y**2) / (f**2 + y**2) )
+        else:
+            f = self.w / (2.0 * np.tan(self.fov / 2.0))
+            theta = np.arctan(y / f)
+            Y = self.d / np.tan( (np.pi / 2.0 - self.pitch) - theta)
+            X = x * np.sqrt( (self.d**2 + Y**2) / (f**2 + y**2) )
         return (X, Y)
     
     """
@@ -280,7 +308,7 @@ class V6:
         pairs = self.match_images(bgr1, bgr2)
         dists = [self.distance(pt1, pt2, project=True) for (pt1, pt2) in pairs]
         dists = np.array(dists)
-        v_list = 3.6 * dists / dt # convert from m/s to km/hr
+        v_list = (3.6 / 1000) * dists / dt # convert from m/s to km/hr
         v_possible = v_list[v_list > v_min] # eliminate non-moving matches (e.g. shadows)
         v = np.mean(v_possible) # take the mean
         headings = [self.heading(pt1, pt2, project=True) for (pt1, pt2) in pairs]
