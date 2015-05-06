@@ -42,6 +42,8 @@ class V6:
     def __init__(self, capture=0, fov=0.75, f=6, aspect=1.33, d=1000, roll=0, pitch=0, yaw=0, hessian=1000, w=640, h=480, neighbors=2, factor=0.5, zmq_addr="tcp://127.0.0.1:1980", zmq_timeout=0.1):
         
         # Things which should be set once
+        if capture.isdigit():
+            capture = int(capture)
         self.camera = cv2.VideoCapture(capture)
         self.zmq_addr = zmq_addr
         self.zmq_timeout = zmq_timeout
@@ -204,25 +206,28 @@ class V6:
     Returns: [ (pt1, pt2), ... ]
     """
     def match_images(self, bgr1, bgr2):
-        if self.matcher is not None:
-            gray1 = cv2.cvtColor(bgr1, cv2.COLOR_BGR2GRAY)
-            gray2 = cv2.cvtColor(bgr2, cv2.COLOR_BGR2GRAY)
-            (pts1, desc1) = self.surf.detectAndCompute(gray1, None)
-            (pts2, desc2) = self.surf.detectAndCompute(gray2, None)
-            matching_pairs = []
-            if pts1 and pts2:
-                all_matches = self.matcher.knnMatch(desc1, desc2, k=self.neighbors)
-                try:
-                    for m,n in all_matches:
-                        if m.distance < self.factor * n.distance:
-                            pt1 = pts1[m.queryIdx]
-                            pt2 = pts2[m.trainIdx]
-                            pt1 = (pt1.pt[0], pt1.pt[1])
-                            pt2 = (pt2.pt[0], pt2.pt[1])
-                            matching_pairs.append((pt1, pt2))
-                except Exception as e:
-                    print str(e)
-            return matching_pairs
+        if (self.matcher is not None):
+            if (bgr1 is not None) and (bgr2 is not None):
+                gray1 = cv2.cvtColor(bgr1, cv2.COLOR_BGR2GRAY)
+                gray2 = cv2.cvtColor(bgr2, cv2.COLOR_BGR2GRAY)
+                (pts1, desc1) = self.surf.detectAndCompute(gray1, None)
+                (pts2, desc2) = self.surf.detectAndCompute(gray2, None)
+                matching_pairs = []
+                if pts1 and pts2:
+                    all_matches = self.matcher.knnMatch(desc1, desc2, k=self.neighbors)
+                    try:
+                        for m,n in all_matches:
+                            if m.distance < self.factor * n.distance:
+                                pt1 = pts1[m.queryIdx]
+                                pt2 = pts2[m.trainIdx]
+                                pt1 = (pt1.pt[0], pt1.pt[1])
+                                pt2 = (pt2.pt[0], pt2.pt[1])
+                                matching_pairs.append((pt1, pt2))
+                    except Exception as e:
+                        print str(e)
+                return matching_pairs
+            else:
+                raise Exception('No images to match!')
         else:
             raise Exception("No matcher exists!")
     
@@ -275,16 +280,17 @@ class V6:
         (X, Y): point location
     """
     def project(self, x, y, rotated=True):
+        f = 2.0 * np.tan(self.fov / 2.0)
         if rotated:
-            f = self.w / (2.0 * np.tan(self.fov / 2.0))
-            theta = np.arctan(y / f)
+            l = self.w / f
+            theta = np.arctan(y / l)
             Y = self.d / np.tan( (np.pi / 2.0 - self.pitch) - theta)
-            X = x * np.sqrt( (self.d**2 + Y**2) / (f**2 + y**2) )
+            X = x * np.sqrt( (self.d**2 + Y**2) / (l**2 + y**2) )
         else:
-            f = self.w / (2.0 * np.tan(self.fov / 2.0))
-            theta = np.arctan(y / f)
+            l = self.w / f
+            theta = np.arctan(y / l)
             Y = self.d / np.tan( (np.pi / 2.0 - self.pitch) - theta)
-            X = x * np.sqrt( (self.d**2 + Y**2) / (f**2 + y**2) )
+            X = x * np.sqrt( (self.d**2 + Y**2) / (l**2 + y**2) )
         return (X, Y)
     
     """
@@ -299,21 +305,32 @@ class V6:
         
     """
     def estimate_vector(self, dt=None, v_min=1, t_max=45):
+    
+        # Read first
         (s1, bgr1) = self.camera.read()
         t1 = time.time()
+
+        # Read second
         (s2, bgr2) = self.camera.read()
         t2 = time.time()
+        
+        # If no dt specificed:
         if not dt:
             dt = t2 - t1
+      
+            
+        # Match keypoint pairss
         pairs = self.match_images(bgr1, bgr2)
+        
+        # Convert units
         dists = [self.distance(pt1, pt2, project=True) for (pt1, pt2) in pairs]
         dists = np.array(dists)
-        v_list = (3.6 / 1000) * dists / dt # convert from m/s to km/hr
+        v_list = (3.6 / 1000.0) * (dists / dt) # convert from m/s to km/hr
         v_possible = v_list[v_list > v_min] # eliminate non-moving matches (e.g. shadows)
         v = np.mean(v_possible) # take the mean
         headings = [self.heading(pt1, pt2, project=True) for (pt1, pt2) in pairs]
         headings = np.array(headings)
-        t_list = (np.pi / 180) * headings
+        t_list = (np.pi / 180.0) * headings
         t_possible = t_list[t_list < t_max]
         t = np.mean(t_possible)
         return (v, t, pairs, bgr1, bgr2) # (gamma, theta)
@@ -344,6 +361,7 @@ class V6:
                         break
             except Exception as e:
                 print str(e)
+            except KeyboardInterrupt as e:
                 break
                 
     """
