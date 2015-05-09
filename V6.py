@@ -318,8 +318,9 @@ class V6:
         if gps:
             try:
                 self.gps = gpsd.gps()
+                self.gps.stream()
             except Exception as e:
-                #raise e
+                raise e
                 self.gps = None
         else:
             self.gps = gps
@@ -331,7 +332,6 @@ class V6:
         while True:
             try:
                 (v_best, pairs, bgr1, bgr2) = self.estimate_vector(dt=dt)
-                print v_best.mean()
                 if display:
                     output = np.array(np.hstack((bgr1, bgr2)))
                     for ((x1,y1), (x2,y2)) in pairs:
@@ -346,10 +346,15 @@ class V6:
                 if logging:
                     datetime.strftime(datetime.now(), name)
                     newline = []
-                    if self.gps:
+                    if self.gps is not None:
                         self.gps.next()
-                        gps_data = [self.gps.longitude, self.gps.latitude] #TODO add more gps data
+                        lon = self.gps.fix.longitude
+                        lat = self.gps.fix.latitude
+                        alt = self.gps.fix.altitude
+                        print("%f N\t%f E\t%f m\t%f m/s" % (lat, lon, alt, v_best.mean()))
+                        gps_data = [str(g) for g in [lon, lat, alt]] #TODO add more gps data
                         newline = newline + gps_data
+                        
                     v_best = [str(v) for v in v_best.tolist()]
                     newline = newline + v_best
                     newline.append('\n')
