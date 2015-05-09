@@ -19,6 +19,7 @@ from itertools import cycle
 import zmq
 import json
 from datetime import datetime
+import gps as gpsd
 
 # Useful Functions 
 def pretty_print(task, msg):
@@ -39,20 +40,16 @@ class V6:
         hessian : iterations of hessian filter
         frame
     """
-    def __init__(self, capture=0, fov=0.75, f=6, aspect=1.33, d=1000, roll=0, pitch=0, yaw=0, hessian=1000, w=640, h=480, neighbors=2, factor=0.5, zmq_addr="tcp://127.0.0.1:1980", zmq_timeout=0.1):
+    def __init__(self, capture=0, fov=0.75, f=6, aspect=1.33, d=1000, roll=0, pitch=0, yaw=0, hessian=1000, w=640, h=480, neighbors=2, factor=0.7):
         
         # Things which should be set once
-        if capture.isdigit():
-            capture = int(capture)
+        try:
+            if capture.isdigit():
+                capture = int(capture)
+        except Exception as e:
+            pass
         self.camera = cv2.VideoCapture(capture)
-        self.zmq_addr = zmq_addr
-        self.zmq_timeout = zmq_timeout
-        self.zmq_context = zmq.Context()
-        self.zmq_client = self.zmq_context.socket(zmq.REQ)
-        self.zmq_client.connect(self.zmq_addr)
-        self.zmq_poller = zmq.Poller()
-        self.zmq_poller.register(self.zmq_client, zmq.POLLIN)
-        
+       
         # Things which can be changed at any time
         self.set_matchfactor(factor)
         self.set_resolution(w, h)
@@ -216,7 +213,7 @@ class V6:
                 if pts1 and pts2:
                     all_matches = self.matcher.knnMatch(desc1, desc2, k=self.neighbors)
                     try:
-                        for m,n in all_matches:
+                        for (m,n) in all_matches:
                             if m.distance < self.factor * n.distance:
                                 pt1 = pts1[m.queryIdx]
                                 pt2 = pts2[m.trainIdx]
@@ -247,23 +244,6 @@ class V6:
             (x2, y2) = self.project(x2, y2)
         dist = np.sqrt( (x2 - x1)**2 + (y2 - y1)**2 )
         return dist
-    
-    """
-    Find the direction of travel
-    Arguments
-        pt1 : (int x1, int y1)
-        pt2 : (int x2, int y2)
-    Returns:
-        theta : float
-    """
-    def heading(self, pt1, pt2, project=False):
-        (x1, y1) = pt1
-        (x2, y2) = pt2
-        if project:
-            (x1, y1) = self.project(x1, y1)
-            (x2, y2) = self.project(x2, y2)
-        theta = np.tan( (x2 - x1) / (y2 - y1) )
-        return theta
     
     """
     Project points from pixels to real units
@@ -304,49 +284,52 @@ class V6:
         bgr2 : the second image
         
     """
-    def estimate_vector(self, dt=None, v_min=1, t_max=45):
-    
+    def estimate_vector(self, dt=None, p_min=5, p_max=95):
+        # Flush buffer
+        for i in range(3):
+            self.camera.read()
         # Read first
         (s1, bgr1) = self.camera.read()
         t1 = time.time()
-
         # Read second
         (s2, bgr2) = self.camera.read()
         t2 = time.time()
-        
         # If no dt specificed:
         if not dt:
             dt = t2 - t1
-      
-            
         # Match keypoint pairss
         pairs = self.match_images(bgr1, bgr2)
-        
         # Convert units
         dists = [self.distance(pt1, pt2, project=True) for (pt1, pt2) in pairs]
         dists = np.array(dists)
-        v_list = (3.6 / 1000.0) * (dists / dt) # convert from m/s to km/hr
-        v_possible = v_list[v_list > v_min] # eliminate non-moving matches (e.g. shadows)
-        v = np.mean(v_possible) # take the mean
-        headings = [self.heading(pt1, pt2, project=True) for (pt1, pt2) in pairs]
-        headings = np.array(headings)
-        t_list = (np.pi / 180.0) * headings
-        t_possible = t_list[t_list < t_max]
-        t = np.mean(t_possible)
-        return (v, t, pairs, bgr1, bgr2) # (gamma, theta)
+        v_all = (3.6 / 1000.0) * (dists / dt) # convert from m/s to km/hr
+        v_min = np.percentile(v_all, p_min)
+        v_max = np.percentile(v_all, p_max)
+        v_top = v_all[v_all > v_min]
+        v_best = v_top[v_top < v_max]
+        return (v_best, pairs, bgr1, bgr2) # (gamma, theta)
     
     """
-    Test the matching algorithm on a video file with a fixed frame rate
+    Run the matching algorithm directly on a video source or file
     Optional Arguments:
         dt : the time between each frame
     """
-    def run(self, dt=None, display=False, wait=0):
+    def run(self, dt=None, display=False, logging=False, name="%m-%d %H:%M.csv", gps=False):
+        if gps:
+            try:
+                self.gps = gpsd.gps()
+            except Exception as e:
+                #raise e
+                self.gps = None
+        else:
+            self.gps = gps
+        if logging:
+            logname = datetime.strftime(datetime.now(), name)
+            logfile = open(logname, 'w')
         while True:
             try:
-                (v, t, pairs, bgr1, bgr2) = self.estimate_vector(dt=dt)
-                pretty_print('CV6', '%f km/h at %f deg' % (v, t))
-                
-                # (Optional) Display images
+                (v_best, pairs, bgr1, bgr2) = self.estimate_vector(dt=dt)
+                print v_best.mean()
                 if display:
                     output = np.array(np.hstack((bgr1, bgr2)))
                     for ((x1,y1), (x2,y2)) in pairs:
@@ -356,11 +339,22 @@ class V6:
                         cv2.circle(output, pt2, 5, (0,255,0), 2)
                         cv2.line(output, pt1, pt2, (255,0,0), 1)
                     cv2.imshow("", output)
-                    time.sleep(wait) # wait between images
                     if cv2.waitKey(5) == 5:
                         break
+                if logging:
+                    datetime.strftime(datetime.now(), name)
+                    newline = []
+                    if self.gps:
+                        self.gps.next()
+                        lon = self.gps.longitude
+                        lat = self.gps.latitude
+                        newline = newline + [lon, lat]
+                    v_best = [str(v) for v in v_best.tolist()]
+                    newline = newline + v_best
+                    newline.append('\n')
+                    logfile.write(','.join(newline))
             except Exception as e:
-                print str(e)
+                raise e
             except KeyboardInterrupt as e:
                 break
                 
@@ -369,7 +363,14 @@ class V6:
     This compensates for the relatively slow pace of the algorithm
     WARNING: this function is meant to be used with a LIVE VIDEO STREAM ONLY
     """
-    def run_async(self, n=3, dt=None, precision=2, uid='CV6', task='push'):
+    def run_async(self, n=3, dt=None, precision=2, uid='CV6', task='push', zmq_addr="tcp://127.0.0.1:1980", zmq_timeout=0.1):
+        self.zmq_addr = zmq_addr
+        self.zmq_timeout = zmq_timeout
+        self.zmq_context = zmq.Context()
+        self.zmq_client = self.zmq_context.socket(zmq.REQ)
+        self.zmq_client.connect(self.zmq_addr)
+        self.zmq_poller = zmq.Poller()
+        self.zmq_poller.register(self.zmq_client, zmq.POLLIN)
         v_list = [0] * n
         t_list = [0] * n
         for i in cycle(range(n)):
