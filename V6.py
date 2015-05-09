@@ -314,7 +314,7 @@ class V6:
     Optional Arguments:
         dt : the time between each frame
     """
-    def run(self, dt=None, display=False, logging=False, name="%m-%d %H:%M.csv", gps=False):
+    def run(self, dt=None, display=False, logging=False, name="%m-%d %H:%M.csv", gps=False, ultrasonic=False):
         if gps:
             try:
                 self.gps = gpsd.gps()
@@ -323,6 +323,8 @@ class V6:
                 self.gps = None
         else:
             self.gps = gps
+        if ultrasonic:
+            pass #TODO add ultrasonic
         if logging:
             logname = datetime.strftime(datetime.now(), name)
             logfile = open(logname, 'w')
@@ -346,9 +348,8 @@ class V6:
                     newline = []
                     if self.gps:
                         self.gps.next()
-                        lon = self.gps.longitude
-                        lat = self.gps.latitude
-                        newline = newline + [lon, lat]
+                        gps_data = [self.gps.longitude, self.gps.latitude] #TODO add more gps data
+                        newline = newline + gps_data
                     v_best = [str(v) for v in v_best.tolist()]
                     newline = newline + v_best
                     newline.append('\n')
