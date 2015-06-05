@@ -24,6 +24,7 @@ import os
 import pygtk
 pygtk.require('2.0')
 import gtk
+import thread
 
 # Useful Functions 
 def pretty_print(task, msg):
@@ -44,7 +45,7 @@ class V6:
         hessian : iterations of hessian filter
         frame
     """
-    def __init__(self, capture=0, fov=0.75, f=6, aspect=1.333, d=1000, roll=0, pitch=0, yaw=0, hessian=2000, w=640, h=480, neighbors=2, factor=0.7):
+    def __init__(self, capture=0, fov=0.75, f=6, aspect=1.333, d=1000, roll=0, pitch=0, yaw=0, hessian=500, w=640, h=480, neighbors=2, factor=0.7):
         
         # Things which should be set once
         pretty_print("CV6", "Initializing capture ...")
@@ -341,28 +342,32 @@ class V6:
                 raise Exception("Negative time differential!")
             
         # Match keypoint pairs
-	try:
+    	try:
             pairs = self.match_images(bgr1, bgr2)
         except:
-	    pairs = []
+	       raise Exception("No matches found!")
+	
         # Convert units
-        dists = [self.distance(pt1, pt2, project=True) for (pt1, pt2) in pairs]
-        dists = np.array(dists)
-        if output_units=="kilometers":
-            v_all=(3.6 / 1000.0) * (dists / dt) # convert from m/s to km/hr
-        elif output_units=="miles":
-            v_all=(2.2369356 / 1000.0) * (dists / dt) # convert from m/s to miles/hr
-        elif output_units=="meters":
-            v_all=(0.001) * (dists / dt)
-        else:
-            v_all = (dists / dt)
+        try:
+            dists = [self.distance(pt1, pt2, project=True) for (pt1, pt2) in pairs]
+            dists = np.array(dists)
+            if output_units=="kilometers":
+                v_all=(3.6 / 1000.0) * (dists / dt) # convert from m/s to km/hr
+            elif output_units=="miles":
+                v_all=(2.2369356 / 1000.0) * (dists / dt) # convert from m/s to miles/hr
+            elif output_units=="meters":
+                v_all=(0.001) * (dists / dt)
+            else:
+                v_all = (dists / dt)
+        except Exception as e:
+	        raise e
         
         # Filter for best matches
         try:
             v_best = v_all[v_all < np.percentile(v_all, p_max)]
         except Exception as e:
-            pretty_print("CV6", str(e))
-            v_best = v_all
+            raise e
+                
         return (v_best, pairs, bgr1, bgr2, 1/dt)
     
     """
@@ -433,7 +438,23 @@ class V6:
             self.log_file.close()
         except:
             pretty_print("CV6", "Failed")
-            
+
+    def update_gui(self):
+    	while gtk.events_pending():
+	        gtk.main_iteration_do(False)
+    
+    def update_gps(self):
+        self.lon = 0
+        self.lat = 0
+        self.speed = 0
+        self.alt = 0
+        while True:
+            self.gps.next()
+            lon = self.gps.fix.longitude
+            lat = self.gps.fix.latitude
+            alt = self.gps.fix.altitude
+            speed = self.gps.fix.speed
+    
     def run_gui(self, gps=True, date_format="%Y-%m-%d %H:%M:%S", log_path='logs'):
         
         # Initialize Terrain at None
@@ -452,6 +473,7 @@ class V6:
             try:
                 self.gps = gpsd.gps()
                 self.gps.stream()
+                thread.start_new_thread(self.update_gps, ())
                 pretty_print("CV6", "GPS connected")
             except Exception as e:
                 pretty_print("CV6", "GPS failed to connect!")
@@ -489,7 +511,6 @@ class V6:
         self.label_fps.show()
         self.table_layout.attach(self.label_fps, 0, 1, 0, 3)
         self.table_layout.show()
-        self.hbox.add(self.table_layout)
         
         # Create Vboz
         self.vbox_app = gtk.VBox(False, 0)
@@ -548,36 +569,33 @@ class V6:
                 
         # Run Loop
         while True:
-            self.label_speed.set(self.label_speed_format % self.display_speed)
-            self.label_msg.set(self.label_msg_format % self.log_name)
-            self.label_fps.set(self.label_fps_format % self.display_fps)
-            time.sleep(0.01)
-            while gtk.events_pending():
-                gtk.main_iteration_do(False)
-            if self.start_stop_command:
-                (v_best, pairs, bgr1, bgr2, fps) = self.estimate_vector()
-                self.display_speed = np.mean(v_best)
-                self.display_fps = fps
-                pretty_print("CV6", "Ground Speed:\t%f km/hr" % np.mean(v_best))
-                pretty_print("CV6", "Frames per Second:\t%f Hz" % np.mean(fps))
-                try:
-                    newline = []
-                    if self.gps is not None:
-                        pretty_pretty("CV6", "Updating GPS coordinates")
-                        self.gps.next()
-                        lon = self.gps.fix.longitude
-                        lat = self.gps.fix.latitude
-                        alt = self.gps.fix.altitude
-                        speed = self.gps.fix.speed
-                        gps_data = [str(g) for g in [lon, lat, alt, speed]] #TODO add more gps data
-                        newline = newline + gps_data
-                    v_best = [str(v) for v in v_best.tolist()]
-                    newline = newline + v_best
-                    newline.append('\n')
-                    self.log_file.write(','.join(newline))
-                except Exception as e:
-                    pretty_print("CV6", str(e))
-        
+            try:
+                self.label_speed.set(self.label_speed_format % self.display_speed)
+                self.label_msg.set(self.label_msg_format % self.log_name)
+                self.label_fps.set(self.label_fps_format % self.display_fps)
+                time.sleep(0.01)
+                self.update_gui()
+                if self.start_stop_command:
+                    (v_best, pairs, bgr1, bgr2, fps) = self.estimate_vector()                
+                    self.display_speed = np.mean(v_best)
+                    self.display_fps = fps
+                    pretty_print("CV6", "Ground Speed:\t%f km/hr" % np.mean(v_best))
+                    pretty_print("CV6", "Frames per Second:\t%f Hz" % np.mean(fps))
+                    self.update_gui()
+                    try:
+                        newline = []
+                        if self.gps is not None:
+                            pretty_print("CV6", "Updating GPS coordinates")
+                            gps_data = [str(g) for g in [self.lon, self.lat, self.alt, self.speed]]
+                            newline = newline + gps_data
+                        v_best = [str(v) for v in v_best.tolist()]
+                        newline = newline + v_best
+                        newline.append('\n')
+                        self.log_file.write(','.join(newline))
+                    except Exception as e:
+                        pretty_print("CV6", str(e))
+            except Exception as e:
+                pretty_print("CV6", str(e))
         # Close Window
         pretty_print("CV6", "Closing window")
                 
