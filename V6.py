@@ -100,7 +100,7 @@ class V6:
     """
     Close
     """  
-    def close(self):
+    def close(self, widget):
         try:
             self.camera.release()
         except:
@@ -317,7 +317,7 @@ class V6:
         bgr2 : the second image
         
     """
-    def estimate_vector(self, dt=None, output_units="kilometers", p_min=5, p_max=95, frames_to_flush=5):
+    def estimate_vector(self, dt=None, output_units="kilometers", p_min=5, p_max=95, frames_to_flush=10):
         # Flush camera buffer
         for i in range(frames_to_flush):
             self.camera.read()
@@ -359,49 +359,89 @@ class V6:
         except Exception as e:
             pretty_print("CV6", str(e))
             v_best = v_all
-        return (v_best, pairs, bgr1, bgr2)
+        return (v_best, pairs, bgr1, bgr2, 1/dt)
     
     """
     Run GUI
-    This function and its handlers (stop and start_gravel, etc) are used for running the GUI
+    This function and its handlers (start_stop and start_gravel, etc) are used for running the GUI
     """
-    def stop(self, widget):
-        self.stop_command = True
-        pretty_print("CV6", "Stopping trial")
+    def start_stop(self, widget):
+        if self.start_stop_command:
+            self.start_stop_command = False
+            pretty_print("CV6", "Stopping trial")
+        else:
+            self.start_stop_command = True
+            pretty_print("CV6", "Starting trial")
     
     def start_grass_short(self, widget):
         self.terrain = "Short Grass"
+        self.close_log()
+        self.create_log()
         pretty_print("CV6", "Setting mode to Short Grass")
         
     def start_grass_tall(self, widget):
         self.terrain = "Tall Grass"
+        self.close_log()
+        self.create_log()
         pretty_print("CV6", "Setting mode to Tall Grass")
         
     def start_gravel(self, widget):
         self.terrain = "Short Gravel"
+        self.close_log()
+        self.create_log()
         pretty_print("CV6", "Setting mode to Gravel")
 
     def start_soy_tall(self, widget):
         self.terrain = "Tall Soy"
+        self.close_log()
+        self.create_log()
         pretty_print("CV6", "Setting mode to Tall Soy")
 
     def start_soy_short(self, widget):
         self.terrain = "Short Soy"
+        self.close_log()
+        self.create_log()
         pretty_print("CV6", "Setting mode to Short Soy")
 
     def start_sand(self, widget):
         self.terrain = "Sand"
+        self.close_log()
+        self.create_log()
         pretty_print("CV6", "Setting mode to Sand")
 
     def start_soil(self, widget):
         self.terrain = "Soil"
+        self.close_log()
+        self.create_log()
         pretty_print("CV6", "Setting mode to Soil")
     
-    def run_gui(self, logging=True, gps=True, date_format="%Y-%m-%d %H:%M:%S", log_ext='.csv', log_path='logs'):
+    def create_log(self, log_path='logs', date_format="%Y-%m-%d %H:%M:%S", log_ext='.csv'):
+        pretty_print("CV6", "Creating log file for %s" % self.terrain)
+        try:
+            self.log_name = datetime.strftime(datetime.now(), date_format) + ' ' + self.terrain + log_ext
+            self.log_file = open(os.path.join(log_path, self.log_name), 'w')
+        except Exception as e:
+            pretty_print("CV6", str(e))
+
+    def close_log(self):
+        pretty_print("CV6", "Attemping to close log for %s" % self.terrain)
+        try:
+            self.log_file.close()
+        except:
+            pretty_print("CV6", "Failed")
+            
+    def run_gui(self, gps=True, date_format="%Y-%m-%d %H:%M:%S", log_path='logs'):
         
         # Initialize Terrain at None
         self.terrain = None
-        self.stop_command = None
+        self.start_stop_command = None
+        self.display_msg = ''
+        self.display_speed = 0
+        self.display_fps = 0
+        self.label_msg_format = "%s"
+        self.label_speed_format = "%f km/h"
+        self.label_fps_format = "%f Hz"
+        self.log_name = ''
         
         # GPS
         if gps:
@@ -419,12 +459,37 @@ class V6:
         # Create Window
         self.window = gtk.Window(gtk.WINDOW_TOPLEVEL)
         self.window.set_title("V6 Trial")
-        self.window.set_size_request(400, 300)
+        self.window.set_size_request(700, 300)
         self.window.connect("delete_event", self.close)
         self.window.set_border_width(10)
         self.window.show()
+        
+        # Horizontal Box
+        self.hbox = gtk.HBox(False, 0)
+        self.hbox.show()
+        self.window.add(self.hbox)
+
+        # Output Table with Labels
+        self.table_layout = gtk.Table(rows=2, columns=2, homogeneous=True)
+        ## Velocity Label
+        self.label_speed = gtk.Label(self.label_speed_format % self.display_speed)
+        self.label_speed.show()
+        self.table_layout.attach(self.label_speed, 0, 1, 0, 1)
+        ## Message Label
+        self.label_msg = gtk.Label(self.label_msg_format % self.display_msg)
+        self.label_msg.show()
+        self.table_layout.attach(self.label_msg, 0, 1, 0, 2)
+        self.hbox.add(self.table_layout)
+        ## FPS Label
+        self.label_fps = gtk.Label(self.label_fps_format % self.display_fps)
+        self.label_fps.show()
+        self.table_layout.attach(self.label_fps, 0, 1, 0, 3)
+        self.table_layout.show()
+        self.hbox.add(self.table_layout)
+        
+        # Create Vboz
         self.vbox_app = gtk.VBox(False, 0)
-        self.window.add(self.vbox_app)
+        self.hbox.add(self.vbox_app)
         self.vbox_app.show()
             
         # Tall Grass Button
@@ -464,24 +529,33 @@ class V6:
         self.button_tall_soy.show()
         
         # Stop Button
-        self.button_stop = gtk.Button("Stop")
-        self.button_stop.connect("clicked", self.stop)
-        self.vbox_app.pack_start(self.button_stop, True, True, 0)
-        self.button_stop.show()
-        
+        self.button_start_stop = gtk.Button("Start/Stop")
+        self.button_start_stop.connect("clicked", self.start_stop)
+        self.vbox_app.pack_start(self.button_start_stop, True, True, 0)
+        self.button_start_stop.show()
+
         pretty_print("CV6", "Waiting for Terrain mode to be set by user")
         while not self.terrain:
-            while gtk.events_pending():
-                gtk.main_iteration_do(False)
-        if logging:
-            log_name = datetime.strftime(datetime.now(), date_format) + ' ' + self.terrain + log_ext
-            log_file = open(os.path.join(log_path, log_name), 'w')
+            if self.start_stop_command:
+                break
+            else:
+                while gtk.events_pending():
+                    gtk.main_iteration_do(False)
                 
         # Run Loop
-        while not self.stop_command:
-            (v_best, pairs, bgr1, bgr2) = self.estimate_vector()
-            pretty_print("CV6", "Velocity: %f" % np.mean(v_best))
-            if logging:
+        while True:
+            self.label_speed.set(self.label_speed_format % self.display_speed)
+            self.label_msg.set(self.label_msg_format % self.log_name)
+            self.label_fps.set(self.label_fps_format % self.display_fps)
+            time.sleep(0.01)
+            while gtk.events_pending():
+                gtk.main_iteration_do(False)
+            if self.start_stop_command:
+                (v_best, pairs, bgr1, bgr2, fps) = self.estimate_vector()
+                self.display_speed = np.mean(v_best)
+                self.display_fps = fps
+                pretty_print("CV6", "Ground Speed:\t%f km/hr" % np.mean(v_best))
+                pretty_print("CV6", "Frames per Second:\t%f Hz" % np.mean(fps))
                 try:
                     newline = []
                     if self.gps is not None:
@@ -496,13 +570,12 @@ class V6:
                     v_best = [str(v) for v in v_best.tolist()]
                     newline = newline + v_best
                     newline.append('\n')
-                    log_file.write(','.join(newline))
+                    self.log_file.write(','.join(newline))
                 except Exception as e:
                     pretty_print("CV6", str(e))
-            while gtk.events_pending():
-                gtk.main_iteration_do(False)
-        if self.logging:
-            self.log_file.close()
+        
+        # Close Window
+        pretty_print("CV6", "Closing window")
                 
     """
     Run the matching algorithm directly on a video source or file
@@ -510,7 +583,17 @@ class V6:
     Optional Arguments:
         dt : the time between each frame
     """
-    def run(self, dt=None, display=False, plot=False, output_units="kilometers", logging=False, date_format="%m-%d %H:%M", log_ext='.csv', gps=False, ultrasonic=False):
+    def run(self,
+        dt=None,
+        display=False,
+        plot=False,
+        output_units="kilometers",
+        logging=False,
+        date_format="%m-%d %H:%M",
+        log_ext='.csv',
+        gps=False,
+        ultrasonic=False
+        ):
     
         # GPS
         if gps:
@@ -532,7 +615,7 @@ class V6:
             
         while True:
             try:
-                (v_best, pairs, bgr1, bgr2) = self.estimate_vector(dt=dt, output_units=output_units)
+                (v_best, pairs, bgr1, bgr2, fps) = self.estimate_vector(dt=dt, output_units=output_units)
                 pretty_print("CV6", "Velocity: %f" % np.mean(v_best))
                 
                 # Display
@@ -609,7 +692,7 @@ class V6:
             
                 ## Capture newest set of images
                 self.flush()
-                (v_best, pairs, bgr1, bgr2) = self.estimate_vector(dt=dt)
+                (v_best, pairs, bgr1, bgr2, fps) = self.estimate_vector(dt=dt)
                 
                 # Find Median with averaging
                 if method=="mean":
