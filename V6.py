@@ -103,6 +103,7 @@ class V6:
     def close(self, widget):
         try:
             self.camera.release()
+            self.window.destroy()
         except:
             raise Exception("Camera failed to close properly")
     
