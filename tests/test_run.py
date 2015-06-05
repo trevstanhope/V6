@@ -13,9 +13,7 @@ except Exception:
 # Excecute run()
 try:
     ext = V6.V6(capture=source)
-    dt = 0.04
-    display = True
-    ext.run(dt=dt, display=display)
+    ext.run(dt=0.05, plot=True, display=False)
 except Exception as error:
     print str(error)
 except KeyboardInterrupt:

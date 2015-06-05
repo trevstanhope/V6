@@ -20,6 +20,10 @@ import zmq
 import json
 from datetime import datetime
 import gps as gpsd
+import os
+import pygtk
+pygtk.require('2.0')
+import gtk
 
 # Useful Functions 
 def pretty_print(task, msg):
@@ -40,7 +44,7 @@ class V6:
         hessian : iterations of hessian filter
         frame
     """
-    def __init__(self, capture=0, fov=0.75, f=6, aspect=1.33, d=1000, roll=0, pitch=0, yaw=0, hessian=1000, w=640, h=480, neighbors=2, factor=0.7):
+    def __init__(self, capture=0, fov=0.75, f=6, aspect=1.333, d=1000, roll=0, pitch=0, yaw=0, hessian=2000, w=640, h=480, neighbors=2, factor=0.7):
         
         # Things which should be set once
         pretty_print("CV6", "Initializing capture ...")
@@ -313,22 +317,26 @@ class V6:
         bgr2 : the second image
         
     """
-    def estimate_vector(self, dt=None, output_units=None, p_min=5, p_max=95):
-        # Flush buffer
-        for i in range(3):
+    def estimate_vector(self, dt=None, output_units="kilometers", p_min=5, p_max=95, frames_to_flush=5):
+        # Flush camera buffer
+        for i in range(frames_to_flush):
             self.camera.read()
             
         # Read first
+        t1a = time.time()
         (s1, bgr1) = self.camera.read()
-        t1 = time.time()
+        t1b = time.time()
         
         # Read second
+        t2a = time.time()
         (s2, bgr2) = self.camera.read()
-        t2 = time.time()
+        t2b = time.time()
         
         # If no dt specificed:
         if not dt:
-            dt = t2 - t1
+            dt = ((t2b+t2a)/2.0) - ((t1b+t1a)/2.0)
+            if dt<0:
+                raise Exception("Negative time differential!")
             
         # Match keypoint pairss
         pairs = self.match_images(bgr1, bgr2)
@@ -347,21 +355,55 @@ class V6:
         
         # Filter for best matches
         try:
-            v_min = np.percentile(v_all, p_min)
-            v_max = np.percentile(v_all, p_max)
-            v_top = v_all[v_all > v_min]
-            v_best = v_top[v_top < v_max]
+            v_best = v_all[v_all < np.percentile(v_all, p_max)]
         except Exception as e:
             pretty_print("CV6", str(e))
-            v_best = v_all # return all if
+            v_best = v_all
         return (v_best, pairs, bgr1, bgr2)
     
     """
-    Run the matching algorithm directly on a video source or file
-    Optional Arguments:
-        dt : the time between each frame
+    Run GUI
+    This function and its handlers (stop and start_gravel, etc) are used for running the GUI
     """
-    def run(self, dt=None, display=False, output_units="kilometers", logging=False, name="%m-%d %H:%M.csv", gps=False, ultrasonic=False):
+    def stop(self, widget):
+        self.stop_command = True
+        pretty_print("CV6", "Stopping trial")
+    
+    def start_grass_short(self, widget):
+        self.terrain = "Short Grass"
+        pretty_print("CV6", "Setting mode to Short Grass")
+        
+    def start_grass_tall(self, widget):
+        self.terrain = "Tall Grass"
+        pretty_print("CV6", "Setting mode to Tall Grass")
+        
+    def start_gravel(self, widget):
+        self.terrain = "Short Gravel"
+        pretty_print("CV6", "Setting mode to Gravel")
+
+    def start_soy_tall(self, widget):
+        self.terrain = "Tall Soy"
+        pretty_print("CV6", "Setting mode to Tall Soy")
+
+    def start_soy_short(self, widget):
+        self.terrain = "Short Soy"
+        pretty_print("CV6", "Setting mode to Short Soy")
+
+    def start_sand(self, widget):
+        self.terrain = "Sand"
+        pretty_print("CV6", "Setting mode to Sand")
+
+    def start_soil(self, widget):
+        self.terrain = "Soil"
+        pretty_print("CV6", "Setting mode to Soil")
+    
+    def run_gui(self, logging=True, gps=True, date_format="%Y-%m-%d %H:%M:%S", log_ext='.csv', log_path='logs'):
+        
+        # Initialize Terrain at None
+        self.terrain = None
+        self.stop_command = None
+        
+        # GPS
         if gps:
             try:
                 self.gps = gpsd.gps()
@@ -373,16 +415,125 @@ class V6:
         else:
             pretty_print("CV6", "GPS disabled")
             self.gps = gps
-        if ultrasonic:
-            pass #TODO add ultrasonic
+            
+        # Create Window
+        self.window = gtk.Window(gtk.WINDOW_TOPLEVEL)
+        self.window.set_title("V6 Trial")
+        self.window.set_size_request(400, 300)
+        self.window.connect("delete_event", self.close)
+        self.window.set_border_width(10)
+        self.window.show()
+        self.vbox_app = gtk.VBox(False, 0)
+        self.window.add(self.vbox_app)
+        self.vbox_app.show()
+            
+        # Tall Grass Button
+        self.button_grass_tall = gtk.Button("Tall Grass")
+        self.button_grass_tall.connect("clicked", self.start_grass_tall)
+        self.vbox_app.pack_start(self.button_grass_tall, True, True, 0)
+        self.button_grass_tall.show()
+        
+        # Tall Grass Button
+        self.button_grass_short = gtk.Button("Short Grass")
+        self.button_grass_short.connect("clicked", self.start_grass_short)
+        self.vbox_app.pack_start(self.button_grass_short, True, True, 0)
+        self.button_grass_short.show()
+        
+        # Gravel Button
+        self.button_gravel = gtk.Button("Gravel")
+        self.button_gravel.connect("clicked", self.start_gravel)
+        self.vbox_app.pack_start(self.button_gravel, True, True, 0)
+        self.button_gravel.show()
+        
+        # Soil Button
+        self.button_soil = gtk.Button("Soil")
+        self.button_soil.connect("clicked", self.start_soil)
+        self.vbox_app.pack_start(self.button_soil, True, True, 0)
+        self.button_soil.show()
+
+        # Short Soy Button
+        self.button_short_soy = gtk.Button("Short Soy")
+        self.button_short_soy.connect("clicked", self.start_soy_short)
+        self.vbox_app.pack_start(self.button_short_soy, True, True, 0)
+        self.button_short_soy.show()
+
+        # Tall Soy Button
+        self.button_tall_soy = gtk.Button("Tall Soy")
+        self.button_tall_soy.connect("clicked", self.start_soy_tall)
+        self.vbox_app.pack_start(self.button_tall_soy, True, True, 0)
+        self.button_tall_soy.show()
+        
+        # Stop Button
+        self.button_stop = gtk.Button("Stop")
+        self.button_stop.connect("clicked", self.stop)
+        self.vbox_app.pack_start(self.button_stop, True, True, 0)
+        self.button_stop.show()
+        
+        pretty_print("CV6", "Waiting for Terrain mode to be set by user")
+        while not self.terrain:
+            while gtk.events_pending():
+                gtk.main_iteration_do(False)
         if logging:
-            logname = datetime.strftime(datetime.now(), name)
-            logfile = open(logname, 'w')
+            log_name = datetime.strftime(datetime.now(), date_format) + ' ' + self.terrain + log_ext
+            log_file = open(os.path.join(log_path, log_name), 'w')
+                
+        # Run Loop
+        while not self.stop_command:
+            (v_best, pairs, bgr1, bgr2) = self.estimate_vector()
+            pretty_print("CV6", "Velocity: %f" % np.mean(v_best))
+            if logging:
+                try:
+                    newline = []
+                    if self.gps is not None:
+                        pretty_pretty("CV6", "Updating GPS coordinates")
+                        self.gps.next()
+                        lon = self.gps.fix.longitude
+                        lat = self.gps.fix.latitude
+                        alt = self.gps.fix.altitude
+                        speed = self.gps.fix.speed
+                        gps_data = [str(g) for g in [lon, lat, alt, speed]] #TODO add more gps data
+                        newline = newline + gps_data
+                    v_best = [str(v) for v in v_best.tolist()]
+                    newline = newline + v_best
+                    newline.append('\n')
+                    log_file.write(','.join(newline))
+                except Exception as e:
+                    pretty_print("CV6", str(e))
+            while gtk.events_pending():
+                gtk.main_iteration_do(False)
+        if self.logging:
+            self.log_file.close()
+                
+    """
+    Run the matching algorithm directly on a video source or file
+        
+    Optional Arguments:
+        dt : the time between each frame
+    """
+    def run(self, dt=None, display=False, plot=False, output_units="kilometers", logging=False, date_format="%m-%d %H:%M", log_ext='.csv', gps=False, ultrasonic=False):
+    
+        # GPS
+        if gps:
+            try:
+                self.gps = gpsd.gps()
+                self.gps.stream()
+                pretty_print("CV6", "GPS connected")
+            except Exception as e:
+                pretty_print("CV6", "GPS failed to connect!")
+                self.gps = None
+        else:
+            pretty_print("CV6", "GPS disabled")
+            self.gps = gps
+            
+        # Logging to Text File
+        if logging:
+            log_name = datetime.strftime(datetime.now(), date_format) + '.csv'
+            log_file = open(os.path.join(log_path, log_name), 'w')
             
         while True:
             try:
                 (v_best, pairs, bgr1, bgr2) = self.estimate_vector(dt=dt, output_units=output_units)
-                pretty_print("CV6", np.mean(v_best))
+                pretty_print("CV6", "Velocity: %f" % np.mean(v_best))
                 
                 # Display
                 if display:
@@ -396,16 +547,22 @@ class V6:
                             cv2.circle(output, pt2, 5, (0,255,0), 2)
                             cv2.line(output, pt1, pt2, (255,0,0), 1)
                             cv2.putText(output, str(d), pt1, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255))
+                        pretty_print("CV6", "Displaying images")
                         cv2.imshow("", output)
                         if cv2.waitKey(5) == 5:
+                            time.sleep(0.01)
                             break
                     except Exception as e:
                         pretty_print("CV6", str(e))
-                
+                        
+                # Plotting
+                if plot:
+                    plt.plot(v_best)
+                    
                 # Logging
                 if logging:
+                    pretty_print("CV6", "Logging to file")
                     try:
-                        datetime.strftime(datetime.now(), name)
                         newline = []
                         if self.gps is not None:
                             pretty_pretty("CV6", "Updating GPS coordinates")
@@ -413,19 +570,20 @@ class V6:
                             lon = self.gps.fix.longitude
                             lat = self.gps.fix.latitude
                             alt = self.gps.fix.altitude
-                            print("%f N\t%f E\t%f m\t%f m/s" % (lat, lon, alt, v_best.mean()))
                             gps_data = [str(g) for g in [lon, lat, alt]] #TODO add more gps data
                             newline = newline + gps_data
                         v_best = [str(v) for v in v_best.tolist()]
                         newline = newline + v_best
                         newline.append('\n')
-                        logfile.write(','.join(newline))
+                        log_file.write(','.join(newline))
                     except Exception as e:
                         pretty_print("CV6", str(e))
             except Exception as e:
                 pretty_print("CV6", str(e))
             except KeyboardInterrupt as e:
                 break
+        if self.logging:
+            self.log_file.close()
                 
     """
     Run algorithm with buffer flushing
