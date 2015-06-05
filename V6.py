@@ -100,7 +100,7 @@ class V6:
     """
     Close
     """  
-    def close(self, widget):
+    def close(self, widget, event, data=None):
         try:
             self.camera.release()
             self.window.destroy()
