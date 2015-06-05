@@ -319,7 +319,8 @@ class V6:
         
     """
     def estimate_vector(self, dt=None, output_units="kilometers", p_min=5, p_max=95, frames_to_flush=10):
-        # Flush camera buffer
+
+	# Flush camera buffer
         for i in range(frames_to_flush):
             self.camera.read()
             
@@ -339,9 +340,11 @@ class V6:
             if dt<0:
                 raise Exception("Negative time differential!")
             
-        # Match keypoint pairss
-        pairs = self.match_images(bgr1, bgr2)
-        
+        # Match keypoint pairs
+	try:
+            pairs = self.match_images(bgr1, bgr2)
+        except:
+	    pairs = []
         # Convert units
         dists = [self.distance(pt1, pt2, project=True) for (pt1, pt2) in pairs]
         dists = np.array(dists)
