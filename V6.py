@@ -98,13 +98,13 @@ class V6:
                 self.matcher = cv2.BFMatcher()
         except Exception as e:
             raise Exception("Failed to generate a matcher")
+    
     """
     Close
     """  
-    def close(self, widget, event, data=None):
+    def close(self):
         try:
             self.camera.release()
-            self.window.destroy()
         except:
             raise Exception("Camera failed to close properly")
     
@@ -437,7 +437,7 @@ class V6:
         try:
             self.log_file.close()
         except:
-            pretty_print("CV6", "Failed")
+            pretty_print("CV6", "Failed to close log, maybe it did not exist?")
 
     def update_gui(self):
     	while gtk.events_pending():
@@ -454,7 +454,14 @@ class V6:
             lat = self.gps.fix.latitude
             alt = self.gps.fix.altitude
             speed = self.gps.fix.speed
-    
+
+    def close_gui(self, widget, event, data=None):
+        try:
+            self.window.destroy()
+            self.run_while = False
+        except:
+            raise Exception("Window failed to close properly")
+            
     def run_gui(self, gps=True, date_format="%Y-%m-%d %H:%M:%S", log_path='logs'):
         
         # Initialize Terrain at None
@@ -467,6 +474,7 @@ class V6:
         self.label_speed_format = "%f km/h"
         self.label_fps_format = "%f Hz"
         self.log_name = ''
+        self.run_while = True
         
         # GPS
         if gps:
@@ -486,7 +494,7 @@ class V6:
         self.window = gtk.Window(gtk.WINDOW_TOPLEVEL)
         self.window.set_title("V6 Trial")
         self.window.set_size_request(700, 300)
-        self.window.connect("delete_event", self.close)
+        self.window.connect("delete_event", self.close_gui)
         self.window.set_border_width(10)
         self.window.show()
         
@@ -559,16 +567,16 @@ class V6:
         self.vbox_app.pack_start(self.button_start_stop, True, True, 0)
         self.button_start_stop.show()
 
+        # Wait for terrain mode
         pretty_print("CV6", "Waiting for Terrain mode to be set by user")
-        while not self.terrain:
+        while not self.terrain and self.run_while:
+            self.update_gui()
             if self.start_stop_command:
                 break
-            else:
-                while gtk.events_pending():
-                    gtk.main_iteration_do(False)
                 
         # Run Loop
-        while True:
+        while self.run_while:
+            self.update_gui()
             try:
                 self.label_speed.set(self.label_speed_format % self.display_speed)
                 self.label_msg.set(self.label_msg_format % self.log_name)
@@ -596,8 +604,6 @@ class V6:
                         pretty_print("CV6", str(e))
             except Exception as e:
                 pretty_print("CV6", str(e))
-        # Close Window
-        pretty_print("CV6", "Closing window")
                 
     """
     Run the matching algorithm directly on a video source or file
