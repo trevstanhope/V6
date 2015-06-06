@@ -7,7 +7,7 @@ import gps as gpsd
 import time
 
 trimble = gpsd.gps()
-trimble.stream() #gpsd.WATCH_ENABLE|gpsd.WATCH_NEWSTYLE)
+trimble.stream(gpsd.WATCH_ENABLE)
 for report in trimble:
     print report
     lon = trimble.fix.longitude

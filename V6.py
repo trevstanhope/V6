@@ -450,10 +450,10 @@ class V6:
         self.alt = 0
         while True:
             self.gps.next()
-            lon = self.gps.fix.longitude
-            lat = self.gps.fix.latitude
-            alt = self.gps.fix.altitude
-            speed = self.gps.fix.speed
+            self.lon = self.gps.fix.longitude
+            self.lat = self.gps.fix.latitude
+            self.alt = self.gps.fix.altitude
+            self.speed = self.gps.fix.speed
 
     def close_gui(self, widget, event, data=None):
         try:
@@ -587,7 +587,7 @@ class V6:
                 self.label_speed.set(self.label_speed_format % self.display_speed)
                 self.label_msg.set(self.label_msg_format % self.log_name)
                 self.label_fps.set(self.label_fps_format % self.display_fps)
-		self.label_gps.set(self.label_gps_format % (self.lat, self.lon, self.speed))
+		self.label_gps.set(self.label_gps_format % (self.speed, self.lat, self.lon))
                 time.sleep(0.01)
                 self.update_gui()
                 if self.start_stop_command:
