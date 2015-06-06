@@ -663,6 +663,8 @@ class V6:
                         if cv2.waitKey(5) == 5:
                             time.sleep(0.01)
                             break
+                    except KeyboardInterrupt:
+                        break
                     except Exception as e:
                         pretty_print("CV6", str(e))
                         
@@ -693,7 +695,7 @@ class V6:
                 pretty_print("CV6", str(e))
             except KeyboardInterrupt as e:
                 break
-        if self.logging:
+        if logging:
             self.log_file.close()
                 
     """

@@ -6,14 +6,20 @@ import V6
 
 try:
     source = sys.argv[1]
-except Exception:
+    if not source.isdigit():
+        fps = float(sys.argv[2])
+        dt = 1 / fps
+    else:
+        raise Exception("WARNING: No FPS specified for video file")
+except Exception as e:
     source = 0
+    dt = None
     print 'WARNING: No source specified, default to 0'
 
 # Excecute run()
 try:
     ext = V6.V6(capture=source)
-    ext.run(dt=0.05, plot=True, display=False)
+    ext.run(dt=dt, plot=True, display=False)
 except Exception as error:
     print str(error)
 except KeyboardInterrupt:
