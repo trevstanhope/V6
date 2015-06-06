@@ -473,6 +473,7 @@ class V6:
         self.label_msg_format = "%s"
         self.label_speed_format = "%f km/h"
         self.label_fps_format = "%f Hz"
+        self.label_gps_format = "%f km/h at (%f N, %f E)"
         self.log_name = ''
         self.run_while = True
         
@@ -518,6 +519,11 @@ class V6:
         self.label_fps = gtk.Label(self.label_fps_format % self.display_fps)
         self.label_fps.show()
         self.table_layout.attach(self.label_fps, 0, 1, 0, 3)
+        self.table_layout.show()
+        ## GPS Label
+        self.label_gps = gtk.Label(self.label_gps_format % (self.lat, self.lon, self.speed))
+        self.label_gps.show()
+        self.table_layout.attach(self.label_gps, 0, 1, 0, 4)
         self.table_layout.show()
         
         # Create Vboz
@@ -581,6 +587,7 @@ class V6:
                 self.label_speed.set(self.label_speed_format % self.display_speed)
                 self.label_msg.set(self.label_msg_format % self.log_name)
                 self.label_fps.set(self.label_fps_format % self.display_fps)
+		self.label_gps.set(self.label_gps_format % (self.lat, self.lon, self.speed))
                 time.sleep(0.01)
                 self.update_gui()
                 if self.start_stop_command:
@@ -594,7 +601,8 @@ class V6:
                         newline = []
                         if self.gps is not None:
                             pretty_print("CV6", "Updating GPS coordinates")
-                            gps_data = [str(g) for g in [self.lon, self.lat, self.alt, self.speed]]
+                            gps_data = [str(g) for g in [self.lat, self.lon, self.alt, self.speed]]
+                            pretty_print("CV6", "%s E, %s N, %s meters, %s m/s" % tuple(gps_data))
                             newline = newline + gps_data
                         v_best = [str(v) for v in v_best.tolist()]
                         newline = newline + v_best
