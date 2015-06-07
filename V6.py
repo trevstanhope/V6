@@ -10,6 +10,8 @@ camera framerate.
 __author__ = 'Trevor Stanhope'
 __version__ = '0.1'
 
+import pango
+import shutil
 import cv2, cv
 import numpy as np
 import time
@@ -25,12 +27,13 @@ import pygtk
 pygtk.require('2.0')
 import gtk
 import thread
+import serial
 
 # Useful Functions 
 def pretty_print(task, msg):
     date = datetime.strftime(datetime.now(), '[%d/%b/%Y:%H:%M:%S]')
     print("%s %s %s" % (date, task, msg))
-    
+
 class V6:
 
     """
@@ -45,7 +48,7 @@ class V6:
         hessian : iterations of hessian filter
         frame
     """
-    def __init__(self, capture=0, fov=0.75, f=6, aspect=1.333, d=1000, roll=0, pitch=0, yaw=0, hessian=500, w=640, h=480, neighbors=2, factor=0.7):
+    def __init__(self, capture=0, fov=0.75, f=6, aspect=1.33, d=1000, roll=0, pitch=0, yaw=0, hessian=500, w=640, h=480, neighbors=2, factor=0.7):
         
         # Things which should be set once
         pretty_print("CV6", "Initializing capture ...")
@@ -220,15 +223,7 @@ class V6:
         else:
             self.f = f
             pretty_print("CV6", "Focal length of %d mm" % (self.f))
-    
-    """ 
-    Flush Buffer
-    To get the most recent images, flush the buffer of older frames
-    """
-    def flush(self, frames=2):
-        for i in range(frames):
-            (s, bgr) = self.camera.read()
-            
+                
     """
     Match Images
     Find (good) pairs of matching points between two images
@@ -292,7 +287,7 @@ class V6:
         (X, Y): point location
     """
     def project(self, x, y, rotated=True):
-        f = 2.0 * np.tan(self.fov / 2.0)
+        f = (2.0 / self.aspect) * np.tan(self.fov / (2.0))
         if rotated:
             l = self.w / f
             theta = np.arctan(y / l)
@@ -319,25 +314,31 @@ class V6:
         bgr2 : the second image
         
     """
-    def estimate_vector(self, dt=None, output_units="kilometers", p_min=5, p_max=95, frames_to_flush=10):
+    def estimate_vector(self, dt=None, output_units="kilometers", p_min=5, p_max=95, frames_to_flush=20):
 
 	# Flush camera buffer
-        for i in range(frames_to_flush):
+        
+        time_deltas = []
+        for i in range(frames_to_flush/2):
+            t1a = time.time()
+            self.camera.read()            
+            t1b = time.time()
+            t2a = time.time()            
             self.camera.read()
-            
+            t2b = time.time()
+            #diff = t2b - t2a
+            diff = (t2b+t2a)/2.0 - (t1b+t1a)/2.0
+            time_deltas.append(diff)
+
         # Read first
-        t1a = time.time()
         (s1, bgr1) = self.camera.read()
-        t1b = time.time()
         
         # Read second
-        t2a = time.time()
         (s2, bgr2) = self.camera.read()
-        t2b = time.time()
         
         # If no dt specificed:
         if not dt:
-            dt = ((t2b+t2a)/2.0) - ((t1b+t1a)/2.0)
+            dt = np.mean(time_deltas)
             if dt<0:
                 raise Exception("Negative time differential!")
             
@@ -382,6 +383,9 @@ class V6:
             self.start_stop_command = True
             pretty_print("CV6", "Starting trial")
     
+    def mark_important(self, widget):
+        shutil.copy2(self.log_path, self.log_path[:-len(self.log_ext)] + ' IMPORTANT' + self.log_ext)
+
     def start_grass_short(self, widget):
         self.terrain = "Short Grass"
         self.close_log()
@@ -395,7 +399,7 @@ class V6:
         pretty_print("CV6", "Setting mode to Tall Grass")
         
     def start_gravel(self, widget):
-        self.terrain = "Short Gravel"
+        self.terrain = "Gravel"
         self.close_log()
         self.create_log()
         pretty_print("CV6", "Setting mode to Gravel")
@@ -424,11 +428,14 @@ class V6:
         self.create_log()
         pretty_print("CV6", "Setting mode to Soil")
     
-    def create_log(self, log_path='logs', date_format="%Y-%m-%d %H:%M:%S", log_ext='.csv'):
+    def create_log(self, log_dir='logs', date_format="%Y-%m-%d %H:%M:%S", log_ext='.csv'):
         pretty_print("CV6", "Creating log file for %s" % self.terrain)
         try:
+	    self.log_ext = log_ext
+	    self.log_dir = log_dir
             self.log_name = datetime.strftime(datetime.now(), date_format) + ' ' + self.terrain + log_ext
-            self.log_file = open(os.path.join(log_path, self.log_name), 'w')
+            self.log_path = os.path.join(log_dir, self.log_name)            
+            self.log_file = open(self.log_path, 'w')
         except Exception as e:
             pretty_print("CV6", str(e))
 
@@ -440,20 +447,30 @@ class V6:
             pretty_print("CV6", "Failed to close log, maybe it did not exist?")
 
     def update_gui(self):
-    	while gtk.events_pending():
+        self.label_speed.set_markup(self.label_speed_format % self.display_speed)
+        self.label_msg.set_markup(self.label_msg_format % self.log_name)
+        self.label_fps.set_markup(self.label_fps_format % self.display_fps)
+        self.label_gps.set_markup(self.label_gps_format % (self.speed, self.lat, self.lon))
+        self.label_status.set_markup(self.label_status_format % str(self.start_stop_command))
+        self.label_terrain.set_markup(self.label_terrain_format % str(self.terrain))
+        while gtk.events_pending():
 	        gtk.main_iteration_do(False)
     
     def update_gps(self):
-        self.lon = 0
-        self.lat = 0
-        self.speed = 0
-        self.alt = 0
         while True:
-            self.gps.next()
-            self.lon = self.gps.fix.longitude
-            self.lat = self.gps.fix.latitude
-            self.alt = self.gps.fix.altitude
-            self.speed = self.gps.fix.speed
+            try:
+                sentence = self.gps.readline()
+                sentence_parsed = sentence.rsplit(',')
+                nmea_type = sentence_parsed[0]
+                #pretty_print("CV6", sentence)
+                if nmea_type == '$GPVTG':
+                    self.speed = float(sentence_parsed[7])
+                elif nmea_type == '$GPGGA':
+                    self.lat = float(sentence_parsed[2])
+                    self.lon = float(sentence_parsed[4])
+                    self.alt = float(sentence_parsed[9])
+            except Exception as e:
+                pretty_print("CV6", str(e))
 
     def close_gui(self, widget, event, data=None):
         try:
@@ -462,29 +479,41 @@ class V6:
         except:
             raise Exception("Window failed to close properly")
             
-    def run_gui(self, gps=True, date_format="%Y-%m-%d %H:%M:%S", log_path='logs'):
+    def run_gui(
+        self,
+        gps=True,
+        gps_device="/dev/ttyS0",
+        gps_baud=38400,
+        date_format="%Y-%m-%d %H:%M:%S",
+        log_path='logs'):
         
         # Initialize Terrain at None
         self.terrain = None
-        self.start_stop_command = None
+        self.start_stop_command = False
         self.display_msg = ''
         self.display_speed = 0
         self.display_fps = 0
-        self.label_msg_format = "%s"
-        self.label_speed_format = "%f km/h"
-        self.label_fps_format = "%f Hz"
-        self.label_gps_format = "%f km/h at (%f N, %f E)"
+        self.label_msg_format = '<span size="20000">Output File: %s</span>'
+        self.label_speed_format = '<span size="20000">CV Speed: %f km/h</span>'
+        self.label_fps_format = '<span size="20000">FPS: %f Hz</span>'
+        self.label_gps_format = '<span size="20000">RTK: %f km/h at (%f N, %f E)</span>'
+        self.label_status_format = '<span size="20000">Logging: %s</span>'
+        self.label_terrain_format = '<span size="20000">Terrain: %s</span>'
         self.log_name = ''
         self.run_while = True
         
         # GPS
         if gps:
             try:
-                self.gps = gpsd.gps()
-                self.gps.stream()
+                self.gps = serial.Serial(gps_device, gps_baud)
+                self.lon = 0
+                self.lat = 0
+                self.speed = 0
+                self.alt = 0
                 thread.start_new_thread(self.update_gps, ())
                 pretty_print("CV6", "GPS connected")
             except Exception as e:
+                pretty_print("CV6", str(e))                
                 pretty_print("CV6", "GPS failed to connect!")
                 self.gps = None
         else:
@@ -497,6 +526,7 @@ class V6:
         self.window.set_size_request(700, 300)
         self.window.connect("delete_event", self.close_gui)
         self.window.set_border_width(10)
+        self.window.maximize()
         self.window.show()
         
         # Horizontal Box
@@ -505,14 +535,16 @@ class V6:
         self.window.add(self.hbox)
 
         # Output Table with Labels
-        self.table_layout = gtk.Table(rows=2, columns=2, homogeneous=True)
+        self.table_layout = gtk.Table(rows=2, columns=1, homogeneous=True)
         ## Velocity Label
         self.label_speed = gtk.Label(self.label_speed_format % self.display_speed)
+        self.label_speed.set_use_markup(True)
         self.label_speed.show()
         self.table_layout.attach(self.label_speed, 0, 1, 0, 1)
         ## Message Label
         self.label_msg = gtk.Label(self.label_msg_format % self.display_msg)
         self.label_msg.show()
+        self.label_msg.set_use_markup(True)
         self.table_layout.attach(self.label_msg, 0, 1, 0, 2)
         self.hbox.add(self.table_layout)
         ## FPS Label
@@ -525,7 +557,17 @@ class V6:
         self.label_gps.show()
         self.table_layout.attach(self.label_gps, 0, 1, 0, 4)
         self.table_layout.show()
-        
+        ## Logging Label
+        self.label_status = gtk.Label(self.label_status_format % str(self.start_stop_command))
+        self.label_status.show()
+        self.table_layout.attach(self.label_status, 0, 1, 0, 5)
+        self.table_layout.show()
+        ## Terrain Label
+        self.label_terrain = gtk.Label(self.label_terrain_format % str(self.terrain))
+        self.label_terrain.show()
+        self.table_layout.attach(self.label_terrain, 0, 1, 0, 6)
+        self.table_layout.show() 
+       
         # Create Vboz
         self.vbox_app = gtk.VBox(False, 0)
         self.hbox.add(self.vbox_app)
@@ -533,24 +575,28 @@ class V6:
             
         # Tall Grass Button
         self.button_grass_tall = gtk.Button("Tall Grass")
+        self.button_grass_tall.child.modify_font(pango.FontDescription("sans 30"))
         self.button_grass_tall.connect("clicked", self.start_grass_tall)
         self.vbox_app.pack_start(self.button_grass_tall, True, True, 0)
         self.button_grass_tall.show()
         
         # Tall Grass Button
         self.button_grass_short = gtk.Button("Short Grass")
+        self.button_grass_short.child.modify_font(pango.FontDescription("sans 30"))
         self.button_grass_short.connect("clicked", self.start_grass_short)
         self.vbox_app.pack_start(self.button_grass_short, True, True, 0)
         self.button_grass_short.show()
         
         # Gravel Button
-        self.button_gravel = gtk.Button("Gravel")
+        self.button_gravel = gtk.Button("Gravel")        
+        self.button_gravel.child.modify_font(pango.FontDescription("sans 30"))
         self.button_gravel.connect("clicked", self.start_gravel)
         self.vbox_app.pack_start(self.button_gravel, True, True, 0)
         self.button_gravel.show()
         
         # Soil Button
         self.button_soil = gtk.Button("Soil")
+        self.button_soil.child.modify_font(pango.FontDescription("sans 30"))
         self.button_soil.connect("clicked", self.start_soil)
         self.vbox_app.pack_start(self.button_soil, True, True, 0)
         self.button_soil.show()
@@ -558,17 +604,27 @@ class V6:
         # Short Soy Button
         self.button_short_soy = gtk.Button("Short Soy")
         self.button_short_soy.connect("clicked", self.start_soy_short)
+        self.button_short_soy.child.modify_font(pango.FontDescription("sans 30"))
         self.vbox_app.pack_start(self.button_short_soy, True, True, 0)
         self.button_short_soy.show()
 
         # Tall Soy Button
         self.button_tall_soy = gtk.Button("Tall Soy")
+        self.button_tall_soy.child.modify_font(pango.FontDescription("sans 30"))
         self.button_tall_soy.connect("clicked", self.start_soy_tall)
         self.vbox_app.pack_start(self.button_tall_soy, True, True, 0)
         self.button_tall_soy.show()
+
+        # Important Button
+        self.button_mark_important = gtk.Button("Mark Important")
+        self.button_mark_important.child.modify_font(pango.FontDescription("sans 30"))
+        self.button_mark_important.connect("clicked", self.mark_important)
+        self.vbox_app.pack_start(self.button_mark_important, True, True, 0)
+        self.button_mark_important.show()
         
         # Stop Button
         self.button_start_stop = gtk.Button("Start/Stop")
+        self.button_start_stop.child.modify_font(pango.FontDescription("sans 30"))
         self.button_start_stop.connect("clicked", self.start_stop)
         self.vbox_app.pack_start(self.button_start_stop, True, True, 0)
         self.button_start_stop.show()
@@ -584,23 +640,15 @@ class V6:
         while self.run_while:
             self.update_gui()
             try:
-                self.label_speed.set(self.label_speed_format % self.display_speed)
-                self.label_msg.set(self.label_msg_format % self.log_name)
-                self.label_fps.set(self.label_fps_format % self.display_fps)
-		self.label_gps.set(self.label_gps_format % (self.speed, self.lat, self.lon))
-                time.sleep(0.01)
-                self.update_gui()
                 if self.start_stop_command:
                     (v_best, pairs, bgr1, bgr2, fps) = self.estimate_vector()                
                     self.display_speed = np.mean(v_best)
                     self.display_fps = fps
                     pretty_print("CV6", "Ground Speed:\t%f km/hr" % np.mean(v_best))
                     pretty_print("CV6", "Frames per Second:\t%f Hz" % np.mean(fps))
-                    self.update_gui()
                     try:
                         newline = []
                         if self.gps is not None:
-                            pretty_print("CV6", "Updating GPS coordinates")
                             gps_data = [str(g) for g in [self.lat, self.lon, self.alt, self.speed]]
                             pretty_print("CV6", "%s E, %s N, %s meters, %s m/s" % tuple(gps_data))
                             newline = newline + gps_data

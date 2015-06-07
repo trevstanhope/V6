@@ -1,4 +1,5 @@
 #!/bin/sh
-sudo stty -F /dev/ttyS0 ispeed 38400
-sudo gpsd -n /dev/ttyS0
+#sudo stty -F /dev/ttyS0 ispeed 38400
+#sudo gpsd -n /dev/ttyS0
+
 python -m tests.test_run_gui 390
