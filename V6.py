@@ -23,11 +23,11 @@ import json
 from datetime import datetime
 import gps as gpsd
 import os
+import thread
+import serial
 import pygtk
 pygtk.require('2.0')
 import gtk
-import thread
-import serial
 
 # Useful Functions 
 def pretty_print(task, msg):
@@ -48,7 +48,21 @@ class V6:
         hessian : iterations of hessian filter
         frame
     """
-    def __init__(self, capture=0, fov=0.75, f=6, aspect=1.33, d=1000, roll=0, pitch=0, yaw=0, hessian=500, w=640, h=480, neighbors=2, factor=0.7):
+    def __init__(self, 
+        capture=0,
+        fov=0.75,
+        f=6,
+        aspect=1.33,
+        d=1000,
+        roll=0,
+        pitch=0,
+        yaw=0,
+        hessian=300,
+        w=640,
+        h=480,
+        neighbors=2,
+        factor=0.7
+    ):
         
         # Things which should be set once
         pretty_print("CV6", "Initializing capture ...")
@@ -83,9 +97,12 @@ class V6:
     """
     Set the keypoint matcher configuration, supports BF or FLANN
     """
-    def set_matcher(self, hessian, use_flann=False):
+    def set_matcher(self, hessian, use_flann=False, use_sift=False):
         try:
-            self.surf = cv2.SURF(hessian)
+            if use_sift:
+                self.keypoint_filter = cv2.SIFT()
+            else:
+                self.keypoint_filter = cv2.SURF(hessian, nOctaves=5, nOctaveLayers=2, extended=1, upright=1)
             # Use the FLANN matcher
             if use_flann:
                 self.FLANN_INDEX_KDTREE = 1
@@ -234,8 +251,8 @@ class V6:
             if (bgr1 is not None) and (bgr2 is not None):
                 gray1 = cv2.cvtColor(bgr1, cv2.COLOR_BGR2GRAY)
                 gray2 = cv2.cvtColor(bgr2, cv2.COLOR_BGR2GRAY)
-                (pts1, desc1) = self.surf.detectAndCompute(gray1, None)
-                (pts2, desc2) = self.surf.detectAndCompute(gray2, None)
+                (pts1, desc1) = self.keypoint_filter.detectAndCompute(gray1, None)
+                (pts2, desc2) = self.keypoint_filter.detectAndCompute(gray2, None)
                 matching_pairs = []
                 if pts1 and pts2:
                     all_matches = self.matcher.knnMatch(desc1, desc2, k=self.neighbors)
@@ -314,7 +331,7 @@ class V6:
         bgr2 : the second image
         
     """
-    def estimate_vector(self, dt=None, output_units="kilometers", p_min=5, p_max=95, frames_to_flush=20):
+    def estimate_vector(self, dt=None, output_units="kilometers", p_min=10, p_max=90, frames_to_flush=20):
 
 	# Flush camera buffer
         
@@ -326,7 +343,6 @@ class V6:
             t2a = time.time()            
             self.camera.read()
             t2b = time.time()
-            #diff = t2b - t2a
             diff = (t2b+t2a)/2.0 - (t1b+t1a)/2.0
             time_deltas.append(diff)
 
@@ -338,7 +354,7 @@ class V6:
         
         # If no dt specificed:
         if not dt:
-            dt = np.mean(time_deltas)
+            dt = np.median(time_deltas)
             if dt<0:
                 raise Exception("Negative time differential!")
             
@@ -486,13 +502,17 @@ class V6:
         gps_baud=38400,
         date_format="%Y-%m-%d %H:%M:%S",
         log_path='logs'):
+	
+	import pygtk
+	pygtk.require('2.0')
+	import gtk        
         
-        # Initialize Terrain at None
+	# Initialize Terrain at None
         self.terrain = None
         self.start_stop_command = False
+	self.display_speed = 0.0
+	self.display_fps = 0.0
         self.display_msg = ''
-        self.display_speed = 0
-        self.display_fps = 0
         self.label_msg_format = '<span size="20000">Output File: %s</span>'
         self.label_speed_format = '<span size="20000">CV Speed: %f km/h</span>'
         self.label_fps_format = '<span size="20000">FPS: %f Hz</span>'
@@ -642,10 +662,10 @@ class V6:
             try:
                 if self.start_stop_command:
                     (v_best, pairs, bgr1, bgr2, fps) = self.estimate_vector()                
-                    self.display_speed = np.mean(v_best)
-                    self.display_fps = fps
-                    pretty_print("CV6", "Ground Speed:\t%f km/hr" % np.mean(v_best))
-                    pretty_print("CV6", "Frames per Second:\t%f Hz" % np.mean(fps))
+                    self.display_speed = np.median(v_best) #! Improved detection?
+		    self.display_fps = np.mean(fps)
+	            pretty_print("CV6", "Ground Speed:\t%f km/hr" % self.display_speed)
+                    pretty_print("CV6", "Frames per Second:\t%f Hz" % self.display_fps)
                     try:
                         newline = []
                         if self.gps is not None:
@@ -717,7 +737,6 @@ class V6:
                         pretty_print("CV6", "Displaying images")
                         cv2.imshow("", output)
                         if cv2.waitKey(5) == 5:
-                            time.sleep(0.01)
                             break
                     except KeyboardInterrupt:
                         break
@@ -727,6 +746,7 @@ class V6:
                 # Plotting
                 if plot:
                     plt.plot(v_best)
+		    plt.show()
                     
                 # Logging
                 if logging:

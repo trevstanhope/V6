@@ -19,7 +19,7 @@ except Exception as e:
 # Excecute run()
 try:
     ext = V6.V6(capture=source)
-    ext.run(dt=dt, plot=True, display=False)
+    ext.run(dt=dt, plot=True, display=True)
 except Exception as error:
     print str(error)
 except KeyboardInterrupt:
