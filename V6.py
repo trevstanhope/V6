@@ -684,7 +684,7 @@ class V6:
             self.update_gui()
             try:
                 if self.start_stop_command:
-                    (v_best, t_best, pairs, bgr1, bgr2, fps) = self.estimate_vector()
+                    (v_all, t_all, pairs, bgr1, bgr2, fps) = self.estimate_vector()
                     bgr = np.vstack([bgr1, bgr2])
                     (h,w,d) = bgr1.shape
                     for ((x1,y1), (x2,y2)) in pairs:
@@ -696,19 +696,15 @@ class V6:
                     pix = gtk.gdk.pixbuf_new_from_array(np.array(bgr), gtk.gdk.COLORSPACE_RGB, 8) 
                     self.image.set_from_pixbuf(pix)
                     
-                    # Filter for best
-                    t_best = np.abs(t_best)
-                    t_75th = np.percentile(t_best, 0.75)
-                    t_25th = np.percentile(t_best, 0.25)
-                    print t_75th
-                    v_less = v_best[t_best <= t_75th]
-                    t_less = t_best[t_best <= t_75th]
-                    v_least = v_less[t_less >= t_25th]
-                    t_least = v_less[t_less >= t_25th]
-                    
-                    v_median = np.median(v_least)
+                    # Filter for best in 25th - 75th percentiles
+                    t_all = np.abs(t_all) # only care about absolute values
+                    t_lowpass = np.percentile(t_all, 75) # must be 0-100
+                    t_highpass = np.percentile(t_all, 25)
+                    t_bandpass = np.logical_and(t_all<=t_lowpass, t_all>=t_highpass)
+                    t_best = t_all[t_bandpass]
+                    v_best = v_all[t_bandpass]
+                    v_median = np.median(v_best)
                     t_mean = np.mean(t_best)
-                    
                     pretty_print("CV6", "Vector Degree:\t%f" % t_mean)
                     self.display_speed = v_median #! Improved detection?
                     self.display_fps = np.mean(fps)
