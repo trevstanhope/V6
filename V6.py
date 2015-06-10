@@ -359,11 +359,11 @@ class V6:
                 raise Exception("Negative time differential!")
             
         # Match keypoint pairs
-    	try:
+        try:
             pairs = self.match_images(bgr1, bgr2)
         except:
-	       raise Exception("No matches found!")
-	
+            raise Exception("No matches found!")
+
         # Convert units
         try:
             dists = [self.distance(pt1, pt2, project=True) for (pt1, pt2) in pairs]
@@ -377,15 +377,9 @@ class V6:
             else:
                 v_all = (dists / dt)
         except Exception as e:
-	        raise e
-        
-        # Filter for best matches
-        try:
-            v_best = v_all[v_all < np.percentile(v_all, p_max)]
-        except Exception as e:
             raise e
                 
-        return (v_best, pairs, bgr1, bgr2, 1/dt)
+        return (v_all, pairs, bgr1, bgr2, 1/dt)
     
     """
     Run GUI
