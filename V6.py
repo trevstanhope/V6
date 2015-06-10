@@ -273,22 +273,32 @@ class V6:
             raise Exception("No matcher exists!")
     
     """
-    Distance between two keypoints, where keypoints are in units of pixels
-    Arguments:
-        pt1 : (int x1, int y1) 
-        pt2 : (int x2, int y2)
-    Returns:
-        distance : float
+    Cartesian to Polar
     """
-    def distance(self, pt1, pt2, project=False):
+    def cart2pol(self, x, y):
+        """ Cartesian to Polar """
+        rho = np.sqrt(x**2 + y**2)
+        phi = np.arctan2(y, x)
+        return(rho, phi)
+        
+    # Distance
+    def vector(self, pt1, pt2, project=False):
+        """
+        Distance between two keypoints, where keypoints are in units of pixels
+        Arguments: pt1 : (int x1, int y1), pt2 : (int x2, int y2)
+        Returns: distance : float
+        """
         (x1, y1) = pt1
         (x2, y2) = pt2
         if project:
             (x1, y1) = self.project(x1, y1)
             (x2, y2) = self.project(x2, y2)
         dist = np.sqrt( (x2 - x1)**2 + (y2 - y1)**2 )
-        return dist
-    
+        theta1 = np.arctan2(y1, x1)
+        theta2 = np.arctan2(y2, x2)
+        theta=theta2 -theta1
+        return dist, theta
+        
     """
     Project points from pixels to real units
     Required arguments:
@@ -366,8 +376,10 @@ class V6:
 
         # Convert units
         try:
-            dists = [self.distance(pt1, pt2, project=True) for (pt1, pt2) in pairs]
+            vectors = [self.vector(pt1, pt2, project=True) for (pt1, pt2) in pairs]
+            [dists, thetas] = zip(*vectors)
             dists = np.array(dists)
+            thetas = np.array(thetas)
             if output_units=="kilometers":
                 v_all=(3.6 / 1000.0) * (dists / dt) # convert from m/s to km/hr
             elif output_units=="miles":
@@ -376,10 +388,11 @@ class V6:
                 v_all=(0.001) * (dists / dt)
             else:
                 v_all = (dists / dt)
+            t_all = thetas * 180 / np.pi
         except Exception as e:
             raise e
                 
-        return (v_all, pairs, bgr1, bgr2, 1/dt)
+        return (v_all, t_all, pairs, bgr1, bgr2, 1/dt)
     
     """
     Run GUI
@@ -464,7 +477,7 @@ class V6:
         self.label_status.set_markup(self.label_status_format % str(self.start_stop_command))
         self.label_terrain.set_markup(self.label_terrain_format % str(self.terrain))
         while gtk.events_pending():
-	        gtk.main_iteration_do(False)
+            gtk.main_iteration_do(False)
     
     def update_gps(self):
         while True:
@@ -514,12 +527,16 @@ class V6:
         self.lat = 0
         self.speed = 0
         self.alt = 0
-        
+        self.bgr1 = np.zeros((640, 480, 3), np.uint8)
+        self.bgr2 = np.zeros((640, 480, 3), np.uint8)
+        self.bgr = np.vstack([self.bgr1, self.bgr2])
+        self.pix = gtk.gdk.pixbuf_new_from_array(self.bgr, gtk.gdk.COLORSPACE_RGB, 8)
+
         # Format Strings
         self.label_msg_format = '<span size="20000">Output File: %s</span>'
-        self.label_speed_format = '<span size="20000">CV Speed: %f km/h</span>'
+        self.label_speed_format = '<span size="20000">CV Speed: %6.2f km/h</span>'
         self.label_fps_format = '<span size="20000">FPS: %f Hz</span>'
-        self.label_gps_format = '<span size="20000">RTK: %f km/h at (%f N, %f E)</span>'
+        self.label_gps_format = '<span size="20000">RTK: %6.2f km/h at (%f N, %f E)</span>'
         self.label_status_format = '<span size="20000">Logging: %s</span>'
         self.label_terrain_format = '<span size="20000">Terrain: %s</span>'
         
@@ -550,6 +567,15 @@ class V6:
         self.hbox = gtk.HBox(False, 0)
         self.hbox.show()
         self.window.add(self.hbox)
+        
+        # Images VBox
+        self.vbox1 = gtk.VBox(False, 0)
+        self.image = gtk.Image()
+        self.image.set_from_pixbuf(self.pix)
+        self.image.show()
+        self.vbox1.add(self.image)
+        self.vbox1.show()
+        self.hbox.add(self.vbox1)
 
         # Output Table with Labels
         self.table_layout = gtk.Table(rows=2, columns=1, homogeneous=True)
@@ -658,10 +684,30 @@ class V6:
             self.update_gui()
             try:
                 if self.start_stop_command:
-                    (v_best, pairs, bgr1, bgr2, fps) = self.estimate_vector()                
-                    self.display_speed = np.median(v_best) #! Improved detection?
-		    self.display_fps = np.mean(fps)
-	            pretty_print("CV6", "Ground Speed:\t%f km/hr" % self.display_speed)
+                    (v_best, t_best, pairs, bgr1, bgr2, fps) = self.estimate_vector()
+                    bgr = np.vstack([bgr1, bgr2])
+                    (h,w,d) = bgr1.shape
+                    for ((x1,y1), (x2,y2)) in pairs:
+                        pt1 = (int(x1), int(y1))
+                        pt2 = (int(x2), int(y2+h))
+                        cv2.circle(bgr, pt1, 5, (0,255,0), 1)
+                        cv2.circle(bgr, pt2, 5, (255,0,0), 1)
+                        cv2.line(bgr, pt1, pt2, (128,128,128), 1)
+                    pix = gtk.gdk.pixbuf_new_from_array(np.array(bgr), gtk.gdk.COLORSPACE_RGB, 8) 
+                    self.image.set_from_pixbuf(pix)
+                    
+                    # Filter for best
+                    t_best = np.abs(t_best)
+                    t_75th = np.percentile(t_best, 0.75)
+                    print t_75th
+                    v_good = v_best[t_best <= t_75th]
+                    v_median = np.median(v_good)
+                    t_mean = np.mean(t_best)
+                    
+                    pretty_print("CV6", "Vector Degree:\t%f" % t_mean)
+                    self.display_speed = v_median #! Improved detection?
+                    self.display_fps = np.mean(fps)
+                    pretty_print("CV6", "Ground Speed:\t%f km/hr" % self.display_speed)
                     pretty_print("CV6", "Frames per Second:\t%f Hz" % self.display_fps)
                     try:
                         newline = []
@@ -716,7 +762,7 @@ class V6:
             
         while True:
             try:
-                (v_best, pairs, bgr1, bgr2, fps) = self.estimate_vector(dt=dt, output_units=output_units)
+                (v_best, t_best, pairs, bgr1, bgr2, fps) = self.estimate_vector(dt=dt, output_units=output_units)
                 pretty_print("CV6", "Velocity: %f" % np.mean(v_best))
                 
                 # Display
@@ -795,7 +841,7 @@ class V6:
             
                 ## Capture newest set of images
                 self.flush()
-                (v_best, pairs, bgr1, bgr2, fps) = self.estimate_vector(dt=dt)
+                (v_best, t_best, pairs, bgr1, bgr2, fps) = self.estimate_vector(dt=dt)
                 
                 # Find Median with averaging
                 if method=="mean":
