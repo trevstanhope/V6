@@ -496,34 +496,37 @@ class V6:
         gps_baud=38400,
         date_format="%Y-%m-%d %H:%M:%S",
         log_path='logs'):
-	
-	import pygtk
-	pygtk.require('2.0')
-	import gtk        
         
-	# Initialize Terrain at None
+        # Imports
+        import pygtk
+        pygtk.require('2.0')
+        import gtk        
+        
+        # Initialize Terrain, etc. at Default Values
         self.terrain = None
         self.start_stop_command = False
-	self.display_speed = 0.0
-	self.display_fps = 0.0
+        self.display_speed = 0.0
+        self.display_fps = 0.0
         self.display_msg = ''
+        self.log_name = ''
+        self.run_while = True
+        self.lon = 0
+        self.lat = 0
+        self.speed = 0
+        self.alt = 0
+        
+        # Format Strings
         self.label_msg_format = '<span size="20000">Output File: %s</span>'
         self.label_speed_format = '<span size="20000">CV Speed: %f km/h</span>'
         self.label_fps_format = '<span size="20000">FPS: %f Hz</span>'
         self.label_gps_format = '<span size="20000">RTK: %f km/h at (%f N, %f E)</span>'
         self.label_status_format = '<span size="20000">Logging: %s</span>'
         self.label_terrain_format = '<span size="20000">Terrain: %s</span>'
-        self.log_name = ''
-        self.run_while = True
         
         # GPS
         if gps:
             try:
                 self.gps = serial.Serial(gps_device, gps_baud)
-                self.lon = 0
-                self.lat = 0
-                self.speed = 0
-                self.alt = 0
                 thread.start_new_thread(self.update_gps, ())
                 pretty_print("CV6", "GPS connected")
             except Exception as e:
