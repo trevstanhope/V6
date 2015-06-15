@@ -341,21 +341,22 @@ class V6:
         bgr2 : the second image
         
     """
-    def estimate_vector(self, dt=None, output_units="kilometers", p_min=10, p_max=90, frames_to_flush=20):
+    def estimate_vector(self, dt=None, output_units="kilometers", frames_to_flush=20):
 
 	# Flush camera buffer
         
         time_deltas = []
-        for i in range(frames_to_flush/2):
+        for i in range(frames_to_flush):
             t1a = time.time()
-            self.camera.read()            
+            s1, bgr1 = self.camera.read()            
             t1b = time.time()
             t2a = time.time()            
-            self.camera.read()
+            s2, bgr2 = self.camera.read()
             t2b = time.time()
             diff = (t2b+t2a)/2.0 - (t1b+t1a)/2.0
-            time_deltas.append(diff)
-
+            if (s1 and s2) and (diff > 0.01):
+		time_deltas.append(diff)
+	
         # Read first
         (s1, bgr1) = self.camera.read()
         
@@ -364,7 +365,7 @@ class V6:
         
         # If no dt specificed:
         if not dt:
-            dt = np.median(time_deltas)
+            dt = np.min(time_deltas)
             if dt<0:
                 raise Exception("Negative time differential!")
             
