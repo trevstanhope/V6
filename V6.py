@@ -341,7 +341,7 @@ class V6:
         bgr2 : the second image
         
     """
-    def estimate_vector(self, dt=None, output_units="kilometers", frames_to_flush=20):
+    def estimate_vector(self, dt=None, output_units="kilometers", frames_to_flush=10):
 
 	# Flush camera buffer
         
@@ -366,6 +366,11 @@ class V6:
         # If no dt specificed:
         if not dt:
             dt = np.min(time_deltas)
+	    self.dt.reverse()
+	    self.dt.pop()
+	    self.dt.reverse()
+	    self.dt.append(dt)
+	    dt = np.mean(self.dt)
             if dt<0:
                 raise Exception("Negative time differential!")
             
@@ -509,7 +514,9 @@ class V6:
         gps_device="/dev/ttyS0",
         gps_baud=38400,
         date_format="%Y-%m-%d %H:%M:%S",
-        log_path='logs'):
+        log_path='logs',
+	num_fps_hist=5
+	):
         
         # Imports
         import pygtk
@@ -528,6 +535,7 @@ class V6:
         self.lat = 0
         self.speed = 0
         self.alt = 0
+	self.dt = [0] * num_fps_hist 
         self.bgr1 = np.zeros((640, 480, 3), np.uint8)
         self.bgr2 = np.zeros((640, 480, 3), np.uint8)
         self.bgr = np.vstack([self.bgr1, self.bgr2])
@@ -580,22 +588,22 @@ class V6:
 
         # Output Table with Labels
         self.table_layout = gtk.Table(rows=2, columns=1, homogeneous=True)
-        ## Velocity Label
-        self.label_speed = gtk.Label(self.label_speed_format % self.display_speed)
-        self.label_speed.set_use_markup(True)
-        self.label_speed.show()
-        self.table_layout.attach(self.label_speed, 0, 1, 0, 1)
         ## Message Label
         self.label_msg = gtk.Label(self.label_msg_format % self.display_msg)
         self.label_msg.show()
         self.label_msg.set_use_markup(True)
-        self.table_layout.attach(self.label_msg, 0, 1, 0, 2)
+        self.table_layout.attach(self.label_msg, 0, 1, 0, 1)
         self.hbox.add(self.table_layout)
         ## FPS Label
         self.label_fps = gtk.Label(self.label_fps_format % self.display_fps)
         self.label_fps.show()
-        self.table_layout.attach(self.label_fps, 0, 1, 0, 3)
+        self.table_layout.attach(self.label_fps, 0, 1, 0, 2)
         self.table_layout.show()
+        ## Velocity Label
+        self.label_speed = gtk.Label(self.label_speed_format % self.display_speed)
+        self.label_speed.set_use_markup(True)
+        self.label_speed.show()
+        self.table_layout.attach(self.label_speed, 0, 1, 0, 3)
         ## GPS Label
         self.label_gps = gtk.Label(self.label_gps_format % (self.lat, self.lon, self.speed))
         self.label_gps.show()
@@ -684,7 +692,7 @@ class V6:
         while self.run_while:
             self.update_gui()
             try:
-                if self.start_stop_command:
+                if True: #self.start_stop_command:
                     (v_all, t_all, pairs, bgr1, bgr2, fps) = self.estimate_vector()
                     bgr = np.vstack([bgr1, bgr2])
                     (h,w,d) = bgr1.shape
@@ -693,17 +701,13 @@ class V6:
                         pt2 = (int(x2), int(y2+h))
                         cv2.circle(bgr, pt1, 5, (0,255,0), 1)
                         cv2.circle(bgr, pt2, 5, (255,0,0), 1)
-                        cv2.line(bgr, pt1, pt2, (128,128,128), 1)
+                        #cv2.line(bgr, pt1, pt2, (128,128,128), 1)
                     pix = gtk.gdk.pixbuf_new_from_array(np.array(bgr), gtk.gdk.COLORSPACE_RGB, 8) 
                     self.image.set_from_pixbuf(pix)
                     
                     # Filter for best in 25th - 75th percentiles
-                    t_all = np.abs(t_all) # only care about absolute values
-                    t_lowpass = np.percentile(t_all, 75) # must be 0-100
-                    t_highpass = np.percentile(t_all, 25)
-                    t_bandpass = np.logical_and(t_all<=t_lowpass, t_all>=t_highpass)
-                    t_best = t_all[t_bandpass]
-                    v_best = v_all[t_bandpass]
+                    v_best = v_all
+                    t_best = t_all
                     v_median = np.median(v_best)
                     t_mean = np.mean(t_best)
                     pretty_print("CV6", "Vector Degree:\t%f" % t_mean)
@@ -718,9 +722,21 @@ class V6:
                             pretty_print("CV6", "%s E, %s N, %s meters, %s m/s" % tuple(gps_data))
                             newline = newline + gps_data
                         v_best = [str(v) for v in v_best.tolist()]
-                        newline = newline + v_best
+                        t_best = [str(t) for t in t_best.tolist()]
+			vt_best = []
+		        for i in range(len(v_best)):
+			    t = t_best[i]
+			    v = v_best[i]
+			    if t < 0:
+			        vt = v + '-' + t + 'i'
+                            else:
+			        vt = v + '+' + t + 'i'
+                            vt_best.append(vt)               
+                        newline = newline + vt_best
                         newline.append('\n')
-                        self.log_file.write(','.join(newline))
+			if self.start_stop_command:
+                            self.log_file.write(','.join(newline))
+			
                     except Exception as e:
                         pretty_print("CV6", str(e))
             except Exception as e:
