@@ -10,6 +10,8 @@ camera framerate.
 __author__ = 'Trevor Stanhope'
 __version__ = '0.1'
 
+from itertools import groupby as g
+import scipy.cluster.hierarchy as hcluster
 import pango
 import shutil
 import cv2, cv
@@ -33,6 +35,9 @@ import gtk
 def pretty_print(task, msg):
     date = datetime.strftime(datetime.now(), '[%d/%b/%Y:%H:%M:%S]')
     print("%s %s %s" % (date, task, msg))
+
+def most_common(L):
+  return max(g(sorted(L)), key=lambda(x, v):(len(list(v)),-L.index(x)))[0]
 
 class V6:
 
@@ -295,7 +300,7 @@ class V6:
             (x1, y1) = self.project(x1, y1)
             (x2, y2) = self.project(x2, y2)
         dist = np.sqrt( (x2 - x1)**2 + (y2 - y1)**2 )
-        theta = np.arctan2(float(y2 - y1), float(x2 - x1))
+        theta = np.arctan(float(y2 - y1) / float(x2 - x1))
         return dist, theta
         
     """
@@ -720,14 +725,17 @@ class V6:
                     #pix = gtk.gdk.pixbuf_new_from_array(np.array(bgr), gtk.gdk.COLORSPACE_RGB, 8) 
                     #self.image.set_from_pixbuf(pix)
                     
-                    pretty_print("FLT", "Running filter")
                     # Filter for best
-                    t_sorted = np.sort(t_all)
-                    t_fit = np.polyfit(t_sorted, range(len(pairs)), 4) # 4th degree
-                    t_der = np.polyder(t_fit)
-                    t_best = t_sorted[np.isclose(t_val, 0, atol=0.1)]
-                    v_best = v[np.isclose(t, np.mean(t_best), atol=1)] # within 1 degree
-                    self.display_speed = np.median(v_best) #! Improved detection?
+                    pretty_print("FLT", "Running filter")
+                    data = zip(v_all,t_all)
+                    clusters = hcluster.fclusterdata(data, 1, criterion="distance")
+                    members = np.bincount(clusters)
+                    pretty_print("FLT", "Cluster #%d is the largest of %d sets" % (np.argmax(members), max(clusters)))
+                    v_best = v_all[clusters == np.argmax(members)]
+                    t_best = t_all[clusters == np.argmax(members)]                    
+#                   plt.scatter(*np.transpose(data), c=clusters)
+#                    plt.show()
+                    self.display_speed = np.mean(v_best) #! Improved detection?
                     self.display_fps = fps_avg
                     self.num_matches = len(pairs)
                     pretty_print("CV6", "Vector Degree:\t%f" % np.mean(t_best))
