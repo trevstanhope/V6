@@ -57,7 +57,7 @@ class V6:
         roll=0,
         pitch=0,
         yaw=0,
-        hessian=300,
+        hessian=500,
         w=640,
         h=480,
         neighbors=2,
@@ -102,7 +102,7 @@ class V6:
             if use_sift:
                 self.keypoint_filter = cv2.SIFT()
             else:
-                self.keypoint_filter = cv2.SURF(hessian, nOctaves=5, nOctaveLayers=2, extended=1, upright=1)
+                self.keypoint_filter = cv2.SURF(hessian, nOctaves=5, nOctaveLayers=3, extended=1, upright=1)
             # Use the FLANN matcher
             if use_flann:
                 self.FLANN_INDEX_KDTREE = 1
@@ -247,6 +247,7 @@ class V6:
     Returns: [ (pt1, pt2), ... ]
     """
     def match_images(self, bgr1, bgr2):
+        pretty_print("MATCH", "Natching images")
         if (self.matcher is not None):
             if (bgr1 is not None) and (bgr2 is not None):
                 gray1 = cv2.cvtColor(bgr1, cv2.COLOR_BGR2GRAY)
@@ -294,7 +295,7 @@ class V6:
             (x1, y1) = self.project(x1, y1)
             (x2, y2) = self.project(x2, y2)
         dist = np.sqrt( (x2 - x1)**2 + (y2 - y1)**2 )
-        theta = np.arctan2(y2 - y1, x2 - x1)
+        theta = np.arctan2(float(y2 - y1), float(x2 - x1))
         return dist, theta
         
     """
@@ -339,10 +340,9 @@ class V6:
         bgr2 : the second image
         
     """
-    def estimate_vector(self, dt=None, output_units="kilometers", frames_to_flush=10):
-
-	# Flush camera buffer
+    def estimate_vector(self, fps=None, output_units="kilometers", frames_to_flush=10, dilation = 0.95):
         
+        # Flush camera buffer
         time_deltas = []
         for i in range(frames_to_flush):
             t1a = time.time()
@@ -353,25 +353,29 @@ class V6:
             t2b = time.time()
             diff = (t2b+t2a)/2.0 - (t1b+t1a)/2.0
             if (s1 and s2) and (diff > 0.01):
-		time_deltas.append(diff)
-	
+                time_deltas.append(diff)   
+
         # Read first
         (s1, bgr1) = self.camera.read()
         
         # Read second
         (s2, bgr2) = self.camera.read()
         
-        # If no dt specificed:
-        if not dt:
+        gps_data = [str(g) for g in [self.lat, self.lon, self.alt, self.speed]]
+        
+        # If no fps specificed:
+        if not fps:
             dt = np.min(time_deltas)
-	    self.dt.reverse()
-	    self.dt.pop()
-	    self.dt.reverse()
-	    self.dt.append(dt)
-	    dt = np.mean(self.dt)
+            self.dt.reverse()
+            self.dt.pop()
+            self.dt.reverse()
+            self.dt.append(dt)
+            dt = np.mean(self.dt) * dilation
             if dt<0:
                 raise Exception("Negative time differential!")
-            
+        else:
+            dt = 1/float(fps)
+        
         # Match keypoint pairs
         try:
             pairs = self.match_images(bgr1, bgr2)
@@ -396,7 +400,7 @@ class V6:
         except Exception as e:
             raise e
                 
-        return (v_all, t_all, pairs, bgr1, bgr2, 1/dt)
+        return (v_all, t_all, pairs, bgr1, bgr2, 1/dt, gps_data)
     
     """
     Run GUI
@@ -458,8 +462,8 @@ class V6:
     def create_log(self, log_dir='logs', date_format="%Y-%m-%d %H:%M:%S", log_ext='.csv'):
         pretty_print("CV6", "Creating log file for %s" % self.terrain)
         try:
-	    self.log_ext = log_ext
-	    self.log_dir = log_dir
+            self.log_ext = log_ext
+            self.log_dir = log_dir
             self.log_name = datetime.strftime(datetime.now(), date_format) + ' ' + self.terrain + log_ext
             self.log_path = os.path.join(log_dir, self.log_name)            
             self.log_file = open(self.log_path, 'w')
@@ -480,6 +484,7 @@ class V6:
         self.label_gps.set_markup(self.label_gps_format % (self.speed, self.lat, self.lon))
         self.label_status.set_markup(self.label_status_format % str(self.start_stop_command))
         self.label_terrain.set_markup(self.label_terrain_format % str(self.terrain))
+        self.label_matches.set_markup(self.label_matches_format % self.num_matches)
         while gtk.events_pending():
             gtk.main_iteration_do(False)
     
@@ -489,7 +494,6 @@ class V6:
                 sentence = self.gps.readline()
                 sentence_parsed = sentence.rsplit(',')
                 nmea_type = sentence_parsed[0]
-                #pretty_print("CV6", sentence)
                 if nmea_type == '$GPVTG':
                     self.speed = float(sentence_parsed[7])
                 elif nmea_type == '$GPGGA':
@@ -497,7 +501,11 @@ class V6:
                     self.lon = float(sentence_parsed[4])
                     self.alt = float(sentence_parsed[9])
             except Exception as e:
-                pretty_print("CV6", str(e))
+                self.lat = 0.0
+                self.lon = 0.0
+                self.alt = 0.0
+                self.speed = 0.0
+                pretty_print("GPS", str(e))
 
     def close_gui(self, widget, event, data=None):
         try:
@@ -513,8 +521,9 @@ class V6:
         gps_baud=38400,
         date_format="%Y-%m-%d %H:%M:%S",
         log_path='logs',
-	num_fps_hist=5
-	):
+        num_fps_hist=3,
+        fps=None
+    ):
         
         # Imports
         import pygtk
@@ -533,7 +542,8 @@ class V6:
         self.lat = 0
         self.speed = 0
         self.alt = 0
-	self.dt = [0] * num_fps_hist 
+        self.num_matches = 0
+        self.dt = [0] * num_fps_hist 
         self.bgr1 = np.zeros((640, 480, 3), np.uint8)
         self.bgr2 = np.zeros((640, 480, 3), np.uint8)
         self.bgr = np.vstack([self.bgr1, self.bgr2])
@@ -546,16 +556,17 @@ class V6:
         self.label_gps_format = '<span size="20000">RTK: %6.2f km/h at (%f N, %f E)</span>'
         self.label_status_format = '<span size="20000">Logging: %s</span>'
         self.label_terrain_format = '<span size="20000">Terrain: %s</span>'
-        
+        self.label_matches_format = '<span size="20000">Matches: %d</span>'
+
         # GPS
         if gps:
             try:
                 self.gps = serial.Serial(gps_device, gps_baud)
                 thread.start_new_thread(self.update_gps, ())
-                pretty_print("CV6", "GPS connected")
+                pretty_print("GPS", "GPS connected")
             except Exception as e:
-                pretty_print("CV6", str(e))                
-                pretty_print("CV6", "GPS failed to connect!")
+                pretty_print("GPS", str(e))                
+                pretty_print("GPS", "GPS failed to connect!")
                 self.gps = None
         else:
             pretty_print("CV6", "GPS disabled")
@@ -616,6 +627,11 @@ class V6:
         self.label_terrain = gtk.Label(self.label_terrain_format % str(self.terrain))
         self.label_terrain.show()
         self.table_layout.attach(self.label_terrain, 0, 1, 0, 6)
+        self.table_layout.show() 
+        ## Matches Label
+        self.label_matches = gtk.Label(self.label_matches_format % self.num_matches)
+        self.label_matches.show()
+        self.table_layout.attach(self.label_matches, 0, 1, 0, 7)
         self.table_layout.show() 
        
         # Create Vboz
@@ -691,36 +707,39 @@ class V6:
             self.update_gui()
             try:
                 if True: #self.start_stop_command:
-                    (v_best, t_best, pairs, bgr1, bgr2, fps) = self.estimate_vector()
+                    (v_all, t_all, pairs, bgr1, bgr2, fps_avg, gps_data) = self.estimate_vector(fps=fps)
+                    self.update_gui()                    
                     bgr = np.vstack([bgr1, bgr2])
                     (h,w,d) = bgr1.shape
-                    for ((x1,y1), (x2,y2)) in pairs:
-                        pt1 = (int(x1), int(y1))
-                        pt2 = (int(x2), int(y2+h))
-                        cv2.circle(bgr, pt1, 5, (0,255,0), 1)
-                        cv2.circle(bgr, pt2, 5, (255,0,0), 1)
-                        #cv2.line(bgr, pt1, pt2, (128,128,128), 1)
-                    pix = gtk.gdk.pixbuf_new_from_array(np.array(bgr), gtk.gdk.COLORSPACE_RGB, 8) 
-                    self.image.set_from_pixbuf(pix)
+                                        
+                    #for ((x1,y1), (x2,y2)) in pairs:
+                        #pt1 = (int(x1), int(y1))
+                        #pt2 = (int(x2), int(y2+h))
+                        #cv2.circle(bgr, pt1, 5, (0,255,0), 1)
+                        #cv2.circle(bgr, pt2, 5, (255,0,0), 1)
+                    #pix = gtk.gdk.pixbuf_new_from_array(np.array(bgr), gtk.gdk.COLORSPACE_RGB, 8) 
+                    #self.image.set_from_pixbuf(pix)
                     
                     # Filter for best in 25th - 75th percentiles
+                    pretty_print("FLT", "Running filter")
+                    v_best = v_all
+                    t_best = t_all
                     self.display_speed = np.median(v_best) #! Improved detection?
-                    self.display_fps = fps
+                    self.display_fps = fps_avg
+                    self.num_matches = len(pairs)
                     pretty_print("CV6", "Vector Degree:\t%f" % np.mean(t_best))
                     pretty_print("CV6", "Ground Speed:\t%f km/hr" % self.display_speed)
                     pretty_print("CV6", "Frames per Second:\t%f Hz" % self.display_fps)
                     
                     # Format to CSV
+                    self.update_gui()
                     try:
                         date_time = [datetime.strftime(datetime.now(), "%Y-%m-%d %H:%M:%S.%f")]
-                        gps_data = [str(g) for g in [self.lat, self.lon, self.alt, self.speed]]
                         v_best = [str(v) for v in v_best.tolist()]
                         t_best = [str(t) for t in t_best.tolist()]
-                        newline1 = date_time + gps_data + v_best + '\n'
-                        newline2 = date_time + gps_data + t_best + '\n'
+                        newline1 = date_time + [str(fps_avg)] + gps_data + v_best + ['\n']
                         if self.start_stop_command:
                             self.log_file.write(','.join(newline1))
-                            self.log_file.write(','.join(newline2))
                     except Exception as e:
                         pretty_print("CV6", str(e))
             except Exception as e:
