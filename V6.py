@@ -294,9 +294,7 @@ class V6:
             (x1, y1) = self.project(x1, y1)
             (x2, y2) = self.project(x2, y2)
         dist = np.sqrt( (x2 - x1)**2 + (y2 - y1)**2 )
-        theta1 = np.arctan2(y1, x1)
-        theta2 = np.arctan2(y2, x2)
-        theta=theta2 -theta1
+        theta = np.arctan2(y2 - y1, x2 - x1)
         return dist, theta
         
     """
@@ -693,7 +691,7 @@ class V6:
             self.update_gui()
             try:
                 if True: #self.start_stop_command:
-                    (v_all, t_all, pairs, bgr1, bgr2, fps) = self.estimate_vector()
+                    (v_best, t_best, pairs, bgr1, bgr2, fps) = self.estimate_vector()
                     bgr = np.vstack([bgr1, bgr2])
                     (h,w,d) = bgr1.shape
                     for ((x1,y1), (x2,y2)) in pairs:
@@ -706,37 +704,23 @@ class V6:
                     self.image.set_from_pixbuf(pix)
                     
                     # Filter for best in 25th - 75th percentiles
-                    v_best = v_all
-                    t_best = t_all
-                    v_median = np.median(v_best)
-                    t_mean = np.mean(t_best)
-                    pretty_print("CV6", "Vector Degree:\t%f" % t_mean)
-                    self.display_speed = v_median #! Improved detection?
-                    self.display_fps = np.mean(fps)
+                    self.display_speed = np.median(v_best) #! Improved detection?
+                    self.display_fps = fps
+                    pretty_print("CV6", "Vector Degree:\t%f" % np.mean(t_best))
                     pretty_print("CV6", "Ground Speed:\t%f km/hr" % self.display_speed)
                     pretty_print("CV6", "Frames per Second:\t%f Hz" % self.display_fps)
+                    
+                    # Format to CSV
                     try:
-                        newline = []
-                        if self.gps is not None:
-                            gps_data = [str(g) for g in [self.lat, self.lon, self.alt, self.speed]]
-                            pretty_print("CV6", "%s E, %s N, %s meters, %s m/s" % tuple(gps_data))
-                            newline = newline + gps_data
+                        date_time = [datetime.strftime(datetime.now(), "%Y-%m-%d %H:%M:%S.%f")]
+                        gps_data = [str(g) for g in [self.lat, self.lon, self.alt, self.speed]]
                         v_best = [str(v) for v in v_best.tolist()]
                         t_best = [str(t) for t in t_best.tolist()]
-			vt_best = []
-		        for i in range(len(v_best)):
-			    t = t_best[i]
-			    v = v_best[i]
-			    if t < 0:
-			        vt = v + '-' + t + 'i'
-                            else:
-			        vt = v + '+' + t + 'i'
-                            vt_best.append(vt)               
-                        newline = newline + vt_best
-                        newline.append('\n')
-			if self.start_stop_command:
-                            self.log_file.write(','.join(newline))
-			
+                        newline1 = date_time + gps_data + v_best + '\n'
+                        newline2 = date_time + gps_data + t_best + '\n'
+                        if self.start_stop_command:
+                            self.log_file.write(','.join(newline1))
+                            self.log_file.write(','.join(newline2))
                     except Exception as e:
                         pretty_print("CV6", str(e))
             except Exception as e:
