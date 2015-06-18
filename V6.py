@@ -720,10 +720,13 @@ class V6:
                     #pix = gtk.gdk.pixbuf_new_from_array(np.array(bgr), gtk.gdk.COLORSPACE_RGB, 8) 
                     #self.image.set_from_pixbuf(pix)
                     
-                    # Filter for best in 25th - 75th percentiles
                     pretty_print("FLT", "Running filter")
-                    v_best = v_all
-                    t_best = t_all
+                    # Filter for best
+                    t_sorted = np.sort(t_all)
+                    t_fit = np.polyfit(t_sorted, range(len(pairs)), 4) # 4th degree
+                    t_der = np.polyder(t_fit)
+                    t_best = t_sorted[np.isclose(t_val, 0, atol=0.1)]
+                    v_best = v[np.isclose(t, np.mean(t_best), atol=1)] # within 1 degree
                     self.display_speed = np.median(v_best) #! Improved detection?
                     self.display_fps = fps_avg
                     self.num_matches = len(pairs)
