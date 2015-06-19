@@ -10,7 +10,6 @@ camera framerate.
 __author__ = 'Trevor Stanhope'
 __version__ = '0.1'
 
-from itertools import groupby as g
 import scipy.cluster.hierarchy as hcluster
 import pango
 import shutil
@@ -35,9 +34,6 @@ import gtk
 def pretty_print(task, msg):
     date = datetime.strftime(datetime.now(), '[%d/%b/%Y:%H:%M:%S]')
     print("%s %s %s" % (date, task, msg))
-
-def most_common(L):
-  return max(g(sorted(L)), key=lambda(x, v):(len(list(v)),-L.index(x)))[0]
 
 class V6:
 
@@ -726,16 +722,17 @@ class V6:
                     #self.image.set_from_pixbuf(pix)
                     
                     # Filter for best
+                    # 1. round t_all to 1 deg
+                    # 2. find the most common direction of travel
+                    # 3. find the most common speed of travel (rounded to 0.01 km/h)
+                    # 4. find the pairs which meet both of these criterion
                     pretty_print("FLT", "Running filter")
-                    data = zip(v_all,t_all)
-                    clusters = hcluster.fclusterdata(data, 1, criterion="distance")
-                    members = np.bincount(clusters)
-                    pretty_print("FLT", "Cluster #%d is the largest of %d sets" % (np.argmax(members), max(clusters)))
-                    v_best = v_all[clusters == np.argmax(members)]
-                    t_best = t_all[clusters == np.argmax(members)]                    
-#                   plt.scatter(*np.transpose(data), c=clusters)
-#                    plt.show()
-                    self.display_speed = np.mean(v_best) #! Improved detection?
+                    t_rounded = np.rint(t_all, 0).astype(np.int32)
+                    t_counts = np.bincount(t_rounded)
+                    t_mode = np.argmax(t_counts)
+                    t_best = t_all[np.isclose(t_rounded, t_mode, atol=1)]
+                    v_best = v_all[np.isclose(t_rounded, t_mode, atol=1)]
+                    self.display_speed = np.mean(v_best)
                     self.display_fps = fps_avg
                     self.num_matches = len(pairs)
                     pretty_print("CV6", "Vector Degree:\t%f" % np.mean(t_best))
