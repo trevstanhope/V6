@@ -725,13 +725,14 @@ class V6:
                     # 1. round t_all to 1 deg
                     # 2. find the most common direction of travel
                     # 3. find the most common speed of travel (rounded to 0.01 km/h)
-                    # 4. find the pairs which meet both of these criterion
+                    # 4. find the thetas near the mode within a tolerance of 1 deg
+                    # 5. find the associated velocities
                     pretty_print("FLT", "Running filter")
-                    t_rounded = np.rint(t_all, 0).astype(np.int32)
+                    t_rounded = np.around(t_all, 0).astype(np.int32)
                     t_counts = np.bincount(t_rounded)
                     t_mode = np.argmax(t_counts)
-                    t_best = t_all[np.isclose(t_rounded, t_mode, atol=1)]
-                    v_best = v_all[np.isclose(t_rounded, t_mode, atol=1)]
+                    t_best = np.isclose(t_rounded, t_mode, atol=1)
+                    v_best = v_all[t_best]
                     self.display_speed = np.mean(v_best)
                     self.display_fps = fps_avg
                     self.num_matches = len(pairs)
@@ -744,7 +745,6 @@ class V6:
                     try:
                         date_time = [datetime.strftime(datetime.now(), "%Y-%m-%d %H:%M:%S.%f")]
                         v_best = [str(v) for v in v_best.tolist()]
-                        t_best = [str(t) for t in t_best.tolist()]
                         newline1 = date_time + [str(fps_avg)] + gps_data + v_best + ['\n']
                         if self.start_stop_command:
                             self.log_file.write(','.join(newline1))
