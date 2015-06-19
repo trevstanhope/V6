@@ -728,11 +728,15 @@ class V6:
                     # 4. find the thetas near the mode within a tolerance of 1 deg
                     # 5. find the associated velocities
                     pretty_print("FLT", "Running filter")
-                    t_rounded = np.around(t_all, 0).astype(np.int32)
+                    t_rounded = np.abs(np.around(t_all, 0).astype(np.int32))
                     t_counts = np.bincount(t_rounded)
+                    print t_counts
                     t_mode = np.argmax(t_counts)
+                    print t_mode
                     t_best = np.isclose(t_rounded, t_mode, atol=1)
+                    print t_best                    
                     v_best = v_all[t_best]
+                    print v_best
                     self.display_speed = np.mean(v_best)
                     self.display_fps = fps_avg
                     self.num_matches = len(pairs)
