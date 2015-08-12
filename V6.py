@@ -53,16 +53,16 @@ class V6:
         capture=0,
         fov=0.75,
         f=6,
-        aspect=1.33,
+        cropfactor=1.125,
         d=1000,
         roll=0,
         pitch=0,
         yaw=0,
-        hessian=500,
+        hessian=1000,
         w=640,
         h=480,
         neighbors=2,
-        factor=0.7
+        factor=0.75
     ):
         
         # Things which should be set once
@@ -83,7 +83,7 @@ class V6:
             self.set_matchfactor(factor)
             self.set_resolution(w, h)
             self.set_fov(fov) # set the field of view (horizontal)
-            self.set_aspect(aspect)
+            self.set_cropfactor(cropfactor)
             self.set_focal_length(f)
             self.set_pitch(pitch) # 0 rad
             self.set_roll(roll) # 0 rad
@@ -98,12 +98,9 @@ class V6:
     """
     Set the keypoint matcher configuration, supports BF or FLANN
     """
-    def set_matcher(self, hessian, use_flann=False, use_sift=False):
+    def set_matcher(self, hessian, use_flann=False):
         try:
-            if use_sift:
-                self.keypoint_filter = cv2.SIFT()
-            else:
-                self.keypoint_filter = cv2.SURF(hessian, nOctaves=5, nOctaveLayers=3, extended=1, upright=1)
+            self.keypoint_filter = cv2.SURF(hessian, nOctaves=3, nOctaveLayers=2, extended=1, upright=1)
             # Use the FLANN matcher
             if use_flann:
                 self.FLANN_INDEX_KDTREE = 1
@@ -221,15 +218,15 @@ class V6:
             pretty_print("CV6", "Field-of-View of %f radians" % (self.fov))
 
     """
-    Set Aspect Ratio
-    aspect [constant]
+    Set cropfactor Ratio
+    cropfactor [constant]
     """
-    def set_aspect(self, aspect):
-        if aspect <= 0:
-            raise Exception("Cannot have negative aspect ratio")
+    def set_cropfactor(self, cropfactor):
+        if cropfactor <= 0:
+            raise Exception("Cannot have negative cropfactor ratio")
         else:
-            self.aspect = aspect
-            pretty_print("CV6", "Aspect ratio of %f" % (self.aspect))
+            self.cropfactor = cropfactor
+            pretty_print("CV6", "cropfactor ratio of %f" % (self.cropfactor))
 
     """
     Set Focal Length
@@ -247,33 +244,31 @@ class V6:
     Find (good) pairs of matching points between two images
     Returns: [ (pt1, pt2), ... ]
     """
-    def match_images(self, bgr1, bgr2):
-        pretty_print("MATCH", "Natching images")
-        if (self.matcher is not None):
-            if (bgr1 is not None) and (bgr2 is not None):
-                gray1 = cv2.cvtColor(bgr1, cv2.COLOR_BGR2GRAY)
-                gray2 = cv2.cvtColor(bgr2, cv2.COLOR_BGR2GRAY)
-                (pts1, desc1) = self.keypoint_filter.detectAndCompute(gray1, None)
-                (pts2, desc2) = self.keypoint_filter.detectAndCompute(gray2, None)
-                matching_pairs = []
-                if pts1 and pts2:
-                    all_matches = self.matcher.knnMatch(desc1, desc2, k=self.neighbors)
-                    for (m,n) in all_matches:
-                        try:
-                            if m.distance < self.factor * n.distance:
-                                    pt1 = pts1[m.queryIdx]
-                                    pt2 = pts2[m.trainIdx]
-                                    xy1 = (pt1.pt[0], pt1.pt[1])
-                                    xy2 = (pt2.pt[0], pt2.pt[1])
-                                    matching_pairs.append((xy1, xy2))
-                        except Exception as e:
-                            pretty_print("CV6", "Missing match")
-                    return matching_pairs
-            else:
-                raise Exception('No images to match!')
-        else:
-            raise Exception("No matcher exists!")
-    
+    def match_images(self, bgr1, bgr2, target_pairs=64, upper_lim=10000, lower_lim=100, gain=10):
+        gray1 = cv2.cvtColor(bgr1, cv2.COLOR_BGR2GRAY)
+        gray2 = cv2.cvtColor(bgr2, cv2.COLOR_BGR2GRAY)
+        (pts1, desc1) = self.keypoint_filter.detectAndCompute(gray1, None)
+        (pts2, desc2) = self.keypoint_filter.detectAndCompute(gray2, None)
+        
+        matching_pairs = []
+        if pts1 and pts2:
+            all_matches = self.matcher.knnMatch(desc1, desc2, k=self.neighbors)
+            for (m,n) in all_matches:
+                try:
+                    if m.distance < self.factor * n.distance:
+                        pt1 = pts1[m.queryIdx]
+                        pt2 = pts2[m.trainIdx]
+                        xy1 = (pt1.pt[0], pt1.pt[1])
+                        xy2 = (pt2.pt[0], pt2.pt[1])
+                        matching_pairs.append((xy1, xy2))
+                except Exception as e:
+                    pretty_print("CV6", "Missing match")
+            e = len(matching_pairs) - target_pairs
+            self.keypoint_filter.hessianThreshold += gain * e
+            if self.keypoint_filter.hessianThreshold < lower_lim: self.keypoint_filter.hessianThreshold = lower_lim
+            if self.keypoint_filter.hessianThreshold > upper_lim: self.keypoint_filter.hessianThreshold = upper_lim
+            return matching_pairs
+
     """
     Cartesian to Polar
     """
@@ -314,7 +309,7 @@ class V6:
         (X, Y): point location
     """
     def project(self, x, y, rotated=True):
-        f = (2.0 / self.aspect) * np.tan(self.fov / (2.0))
+        f = 0.69 #(2.0 / self.cropfactor) * np.tan(self.fov / (2.0))
         if rotated:
             l = self.w / f
             theta = np.arctan(y / l)
@@ -341,36 +336,25 @@ class V6:
         bgr2 : the second image
         
     """
-    def estimate_vector(self, fps=None, output_units="kilometers", frames_to_flush=10, dilation = 0.95):
-        
-        # Flush camera buffer
-        time_deltas = []
-        for i in range(frames_to_flush):
-            t1a = time.time()
-            s1, bgr1 = self.camera.read()            
-            t1b = time.time()
-            t2a = time.time()            
-            s2, bgr2 = self.camera.read()
-            t2b = time.time()
-            diff = (t2b+t2a)/2.0 - (t1b+t1a)/2.0
-            if (s1 and s2) and (diff > 0.01):
-                time_deltas.append(diff)   
+    def estimate_vector(
+        self,
+        bgr1, 
+        bgr2,
+        diff,
+        fps=None,
+        output_units="kilometers",
+        dilation = 1.0
+    ):
 
         # Read first
-        (s1, bgr1) = self.camera.read()
-        
-        # Read second
-        (s2, bgr2) = self.camera.read()
-        
         gps_data = [str(g) for g in [self.lat, self.lon, self.alt, self.speed]]
         
         # If no fps specificed:
         if not fps:
-            dt = np.min(time_deltas)
             self.dt.reverse()
             self.dt.pop()
             self.dt.reverse()
-            self.dt.append(dt)
+            self.dt.append(diff)
             dt = np.mean(self.dt) * dilation
             if dt<0:
                 raise Exception("Negative time differential!")
@@ -380,8 +364,8 @@ class V6:
         # Match keypoint pairs
         try:
             pairs = self.match_images(bgr1, bgr2)
-        except:
-            raise Exception("No matches found!")
+        except Exception as e:
+            raise e
 
         # Convert units
         try:
@@ -489,12 +473,13 @@ class V6:
         while gtk.events_pending():
             gtk.main_iteration_do(False)
     
-    def update_gps(self):
+    def update_gps(self, verbose=False):
         while True:
             try:
                 sentence = self.gps.readline()
                 sentence_parsed = sentence.rsplit(',')
                 nmea_type = sentence_parsed[0]
+                if verbose: print sentence
                 if nmea_type == '$GPVTG':
                     self.speed = float(sentence_parsed[7])
                 elif nmea_type == '$GPGGA':
@@ -506,7 +491,25 @@ class V6:
                 self.lon = 0.0
                 self.alt = 0.0
                 self.speed = 0.0
-                pretty_print("GPS", str(e))
+                if verbose: pretty_print("GPS", str(e))
+
+    def update_video(self, N=5, verbose=False):
+        self.diff = 0
+        while True:
+            time_deltas = []
+            while len(time_deltas) < N:
+                t1a = time.time()
+                s1, bgr1 = self.camera.read()            
+                t1b = time.time()
+                t2a = time.time()            
+                s2, bgr2 = self.camera.read()
+                t2b = time.time()
+                diff = (t2b+t2a)/2.0 - (t1b+t1a)/2.0
+                if (s1 and s2) and (diff > 0.01):
+                    time_deltas.append(diff)
+                    self.bgr1 = bgr1
+                    self.bgr2 = bgr2
+            self.diff = np.median(time_deltas)
 
     def close_gui(self, widget, event, data=None):
         try:
@@ -713,13 +716,13 @@ class V6:
                     bgr = np.vstack([bgr1, bgr2])
                     (h,w,d) = bgr1.shape
                                         
-                    #for ((x1,y1), (x2,y2)) in pairs:
-                        #pt1 = (int(x1), int(y1))
-                        #pt2 = (int(x2), int(y2+h))
-                        #cv2.circle(bgr, pt1, 5, (0,255,0), 1)
-                        #cv2.circle(bgr, pt2, 5, (255,0,0), 1)
-                    #pix = gtk.gdk.pixbuf_new_from_array(np.array(bgr), gtk.gdk.COLORSPACE_RGB, 8) 
-                    #self.image.set_from_pixbuf(pix)
+                    for ((x1,y1), (x2,y2)) in pairs:
+                        pt1 = (int(x1), int(y1))
+                        pt2 = (int(x2), int(y2+h))
+                        cv2.circle(bgr, pt1, 5, (0,255,0), 1)
+                        cv2.circle(bgr, pt2, 5, (255,0,0), 1)
+                    pix = gtk.gdk.pixbuf_new_from_array(np.array(bgr), gtk.gdk.COLORSPACE_RGB, 8) 
+                    self.image.set_from_pixbuf(pix)
                     
                     # Filter for best
                     # 1. round t_all to 1 deg
@@ -757,160 +760,100 @@ class V6:
             except Exception as e:
                 pretty_print("CV6", str(e))
                 
-    """
-    Run the matching algorithm directly on a video source or file
+    def run_cli(
+        self,
+        terrain='NONE',
+        gps=True,
+        gps_device="/dev/ttyS0",
+        gps_baud=38400,
+        date_format="%Y-%m-%d %H:%M:%S",
+        log_path='logs',
+        num_fps_hist=3,
+        fps=None
+    ):  
         
-    Optional Arguments:
-        dt : the time between each frame
-    """
-    def run(self,
-        dt=None,
-        display=False,
-        plot=False,
-        output_units="kilometers",
-        logging=False,
-        date_format="%m-%d %H:%M",
-        log_ext='.csv',
-        gps=False,
-        ultrasonic=False
-        ):
-    
+        # Initialize Terrain, etc. at Default Values
+        self.terrain = terrain
+        self.display_speed = 0.0
+        self.display_fps = 0.0
+        self.display_msg = ''
+        self.log_name = ''
+        self.run_while = True
+        self.lon = 0
+        self.lat = 0
+        self.speed = 0
+        self.alt = 0
+        self.num_matches = 0
+        self.dt = [0] * num_fps_hist 
+        self.create_log()
+        self.bgr1 = np.zeros((640, 480, 3), np.uint8)
+        self.bgr2 = np.zeros((640, 480, 3), np.uint8)
+
         # GPS
         if gps:
             try:
-                self.gps = gpsd.gps()
-                self.gps.stream()
-                pretty_print("CV6", "GPS connected")
+                self.gps = serial.Serial(gps_device, gps_baud)
+                thread.start_new_thread(self.update_gps, ())
+                pretty_print("GPS", "GPS connected")
             except Exception as e:
-                pretty_print("CV6", "GPS failed to connect!")
+                pretty_print("GPS", str(e))                
+                pretty_print("GPS", "GPS failed to connect!")
                 self.gps = None
         else:
             pretty_print("CV6", "GPS disabled")
             self.gps = gps
-            
-        # Logging to Text File
-        if logging:
-            log_name = datetime.strftime(datetime.now(), date_format) + '.csv'
-            log_file = open(os.path.join(log_path, log_name), 'w')
-            
+
+        # Video
+        thread.start_new_thread(self.update_video, ())
+        pretty_print("CAM", "Videofeed started")
+                
+        # Run Loop
+        a = time.time()
+        b = time.time()
+        hz = 0    
         while True:
             try:
-                (v_best, t_best, pairs, bgr1, bgr2, fps) = self.estimate_vector(dt=dt, output_units=output_units)
-                pretty_print("CV6", "Velocity: %f" % np.mean(v_best))
-                
-                # Display
-                if display:
-                    try:
-                        output = np.array(np.hstack((bgr1, bgr2)))
-                        for ((x1,y1), (x2,y2)) in pairs:
-                            pt1 = (int(x1), int(y1))
-                            pt2 = (int(x1 + self.w), int(y2))
-                            d = round(self.distance((x1,y1), (x2,y2)), 1)
-                            cv2.circle(output, pt1, 5, (0,0,255), 2)
-                            cv2.circle(output, pt2, 5, (0,255,0), 2)
-                            cv2.line(output, pt1, pt2, (255,0,0), 1)
-                            cv2.putText(output, str(d), pt1, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255))
-                        pretty_print("CV6", "Displaying images")
-                        cv2.imshow("", output)
-                        if cv2.waitKey(5) == 5:
-                            break
-                    except KeyboardInterrupt:
-                        break
-                    except Exception as e:
-                        pretty_print("CV6", str(e))
-                        
-                # Plotting
-                if plot:
-                    plt.plot(v_best)
-		    plt.show()
-                    
-                # Logging
-                if logging:
-                    pretty_print("CV6", "Logging to file")
-                    try:
-                        newline = []
-                        if self.gps is not None:
-                            pretty_pretty("CV6", "Updating GPS coordinates")
-                            self.gps.next()
-                            lon = self.gps.fix.longitude
-                            lat = self.gps.fix.latitude
-                            alt = self.gps.fix.altitude
-                            gps_data = [str(g) for g in [lon, lat, alt]] #TODO add more gps data
-                            newline = newline + gps_data
-                        v_best = [str(v) for v in v_best.tolist()]
-                        newline = newline + v_best
-                        newline.append('\n')
-                        log_file.write(','.join(newline))
-                    except Exception as e:
-                        pretty_print("CV6", str(e))
-            except Exception as e:
-                pretty_print("CV6", str(e))
-            except KeyboardInterrupt as e:
-                break
-        if logging:
-            self.log_file.close()
-                
-    """
-    Run algorithm with buffer flushing
-    This compensates for the relatively slow pace of the algorithm
-    WARNING: this function is meant to be used with a LIVE VIDEO STREAM ONLY
-    """
-    def run_async(self, N=3, dt=None, precision=2, method="mean", uid='CV6', task='push', zmq_addr="tcp://127.0.0.1:1980", zmq_timeout=0.1):
-    
-        # Start ZMQ clients
-        pretty_print("CV6", "Initializing ZMQ client")
-        self.zmq_addr = zmq_addr
-        self.zmq_timeout = zmq_timeout
-        self.zmq_context = zmq.Context()
-        self.zmq_client = self.zmq_context.socket(zmq.REQ)
-        self.zmq_client.connect(self.zmq_addr)
-        self.zmq_poller = zmq.Poller()
-        self.zmq_poller.register(self.zmq_client, zmq.POLLIN)
-        
-        # Run with averaging
-        v_hist = [0] * N
-        for i in cycle(range(N)):
-            try:
-            
-                ## Capture newest set of images
-                self.flush()
-                (v_best, t_best, pairs, bgr1, bgr2, fps) = self.estimate_vector(dt=dt)
-                
-                # Find Median with averaging
-                if method=="mean":
-                    val = np.mean(v_best)
-                if method=="median":
-                    val = np.median(v_best)
-                v_hist[i] = val
-                v_avg = round(np.mean(v_hist), precision)
-                
-                ## Ping Host with new 'event'
-                event = {
-                    'uid' : uid,
-                    'task' : task, # generally, all events from CV6 are pushes
-                    'data' : {
-                        'v_avg' : v_avg
-                    }
-                }
-                pretty_print('CV6', '%s' % str(event))
-                try:
-                    dump = json.dumps(event)
-                    self.zmq_client.send(dump)
-                    time.sleep(self.zmq_timeout)
-                    socks = dict(self.zmq_poller.poll(self.zmq_timeout))
-                    if socks:
-                        if socks.get(self.zmq_client) == zmq.POLLIN:
-                            dump = self.zmq_client.recv(zmq.NOBLOCK) # zmq.NOBLOCK
-                            response = json.loads(dump)
-                            pretty_print('CV6', 'Received: %s' % str(response))
-                        else:
-                            pass
-                    else:
-                        pass
-                except Exception as e:
-                    print str(e)
-                    raise e
+                if True:
+                    print "------------------------------------------"
+                    a = time.time()
+                    bgr1 = self.bgr1
+                    bgr2 = self.bgr2
+                    diff = self.diff                    
+                    (v_all, t_all, pairs, bgr1, bgr2, fps_avg, gps_data) = self.estimate_vector(bgr1, bgr2, diff, fps=fps)
+                   
+                    # Filter for best
+                    # 1. round t_all to 1 deg
+                    # 2. find the most common direction of travel
+                    # 3. find the most common speed of travel (rounded to 0.01 km/h)
+                    # 4. find the thetas near the mode within a tolerance of 1 deg
+                    # 5. find the associated velocities
+                    t_rounded = np.abs(np.around(t_all, 0).astype(np.int32))
+                    t_counts = np.bincount(t_rounded)
+                    t_mode = np.argmax(t_counts)
+                    t_best = np.isclose(t_rounded, t_mode, atol=1)                 
+                    v_best = v_all[t_best]
+                    self.display_speed = np.mean(v_best)
+                    self.display_fps = fps_avg
+                    # Format to CSV
+                    date_time = [datetime.strftime(datetime.now(), "%Y-%m-%d %H:%M:%S.%f")]
+                    v_best = [str(np.median(v_best))] #[str(v) for v in v_best.tolist()]
+                    matches = [str(len(pairs))]
+                    hessian = [str(self.keypoint_filter.hessianThreshold)]
+                    newline1 = date_time + [str(fps_avg)] + gps_data + v_best + matches + hessian + [str(hz)] + ['\n']
+                    self.log_file.write(','.join(newline1))
+                    b = time.time()
+                    hz = 1 / (b - a)
+                    pretty_print("CV6", "Hz:\t%f" % (1 / (b - a)))
+                    pretty_print("CV6", "Vector Degree:\t%f" % np.mean(t_best))
+                    pretty_print("CV6", "CV Speed:\t%f km/hr" % self.display_speed)
+                    pretty_print("CV6", "RTK Speed:\t%s km/hr" % gps_data[3])
+                    pretty_print("CV6", "Hessian:\t%s km/hr" % hessian[0])
+                    pretty_print("CV6", "Matches:\t%s km/hr" % matches[0])
+                    pretty_print("CV6", "FPS:\t%f Hz" % self.display_fps)
+                                        
             except KeyboardInterrupt:
-                raise Exception("Caught kill signal, halting ...")
+                self.log_file.close()
+                break
             except Exception as e:
                 pretty_print("CV6", str(e))
+               

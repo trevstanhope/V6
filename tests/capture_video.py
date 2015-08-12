@@ -9,11 +9,10 @@ import time
 from datetime import datetime
 import os
 import sys
-import V6
 
 # Constants
 index = 0
-file_dir = "results"
+file_dir = ""
 test_name = sys.argv[1]
 vid_type = ".avi"
 vid_date = datetime.strftime(datetime.now(), "%Y-%m-%d %H:%M:%S")
