@@ -1,5 +1,0 @@
-#!/bin/sh
-#sudo stty -F /dev/ttyS0 ispeed 38400
-#sudo gpsd -n /dev/ttyS0
-
-python -m tests.run_cli

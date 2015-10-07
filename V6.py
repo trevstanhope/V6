@@ -308,18 +308,16 @@ class V6:
     Returns:
         (X, Y): point location
     """
-    def project(self, x, y, rotated=True):
+    def project(self, x, y):
+	#x = x - self.w
+	#y = y - self.h
         f = 0.69 #(2.0 / self.cropfactor) * np.tan(self.fov / (2.0))
-        if rotated:
-            l = self.w / f
-            theta = np.arctan(y / l)
-            Y = self.d / np.tan( (np.pi / 2.0 - self.pitch) - theta)
-            X = x * np.sqrt( (self.d**2 + Y**2) / (l**2 + y**2) )
-        else:
-            l = self.w / f
-            theta = np.arctan(y / l)
-            Y = self.d / np.tan( (np.pi / 2.0 - self.pitch) - theta)
-            X = x * np.sqrt( (self.d**2 + Y**2) / (l**2 + y**2) )
+        l = self.w / f
+        theta = np.arctan(y / l)
+        Y = self.d / np.tan( (np.pi / 2.0 - self.pitch) - theta)
+        X = x * np.sqrt( (self.d**2 + Y**2) / (l**2 + y**2) )
+	X = x * 640 / 640.0
+	Y = y * 640 / 640.0
         return (X, Y)
     
     """
@@ -449,7 +447,7 @@ class V6:
         try:
             self.log_ext = log_ext
             self.log_dir = log_dir
-            self.log_name = datetime.strftime(datetime.now(), date_format) + ' ' + self.terrain + log_ext
+            self.log_name = datetime.strftime(datetime.now(), date_format) + ' ' + self.terrain + ' ' + str(self.d) + log_ext
             self.log_path = os.path.join(log_dir, self.log_name)            
             self.log_file = open(self.log_path, 'w')
         except Exception as e:
@@ -836,10 +834,11 @@ class V6:
                     self.display_fps = fps_avg
                     # Format to CSV
                     date_time = [datetime.strftime(datetime.now(), "%Y-%m-%d %H:%M:%S.%f")]
-                    v_best = [str(np.median(v_best))] #[str(v) for v in v_best.tolist()]
+                    cv_speed = [str(np.median(v_best))] #[str(v) for v in v_best.tolist()]
                     matches = [str(len(pairs))]
                     hessian = [str(self.keypoint_filter.hessianThreshold)]
-                    newline1 = date_time + [str(fps_avg)] + gps_data + v_best + matches + hessian + [str(hz)] + ['\n']
+                    error = float(gps_data[3]) - np.median(v_best)
+                    newline1 = date_time + [str(fps_avg)] + gps_data + cv_speed + matches + hessian + [str(hz)] + [str(error)] + ['\n']
                     self.log_file.write(','.join(newline1))
                     b = time.time()
                     hz = 1 / (b - a)
